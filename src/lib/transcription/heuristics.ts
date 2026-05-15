@@ -49,6 +49,18 @@ export function isHallucinationWord(word: string): boolean {
   return true;
 }
 
+/**
+ * True when `text` ends with sentence-final punctuation. Used by the consumer
+ * worker to decide when the audio anchor may advance: we only trim audio at
+ * sentence boundaries, so Whisper retains intra-sentence context across ticks.
+ */
+export function isSentenceEnd(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  const last = t[t.length - 1];
+  return last === '.' || last === '?' || last === '!';
+}
+
 export function rms(samples: Float32Array): number {
   if (samples.length === 0) return 0;
   let sum = 0;

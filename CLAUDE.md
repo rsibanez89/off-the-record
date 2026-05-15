@@ -60,5 +60,11 @@ Project rules for agents working on **Off The Record**. Read `README.md` for wha
 
 - The resampler in `producer.worker.ts` carries `resamplePos` and `prevTail` across frames. If you touch it, preserve the seam-continuity invariant.
 - Renaming the Dexie DB, bumping the schema, or changing `localStorage` keys orphans browser state. Bump the Dexie version cleanly and document the migration.
-- `MIN_WINDOW_S` is currently `0` in the consumer worker for fast user feedback (a grey wrong word at 1 s is preferable to 3 s of empty UI). The hallucination filter catches obvious junk before it commits.
+- `MIN_WINDOW_S` is currently `0` in the consumer worker for fast user feedback (a grey wrong word at 1 s is preferable to 3 s of empty UI).
 - The producer writes to `chunks` and `audioArchive` in one Dexie transaction. Keep them together so a partial write cannot orphan a chunk in one table only.
+
+## 🎯 Live transcription design invariants
+
+- **Audio anchor advances conservatively.** Only trim on sentence boundaries (`.`, `?`, `!`) or when the window grows past `FAST_TRIM_THRESHOLD_S`. Always keep `CONTEXT_LOOKBACK_S` of already-transcribed audio in the window. Aggressive per-word trimming kills accuracy on smaller models. The dual-panel comparison made this visible; do not regress it.
+- **Hallucination on non-silent audio is deferred, not discarded.** The silence gate runs before Whisper; anything reaching the hallucination check has real energy. Whisper outputting garbage on real audio is a model failure, not empty input. Wait for more context. `MAX_WINDOW_S` force-slide is the safety net.
+- **Silence is the only path that drops audio without committing.** Keep it that way: silence is the one signal we can fully trust about "no transcribable content here".

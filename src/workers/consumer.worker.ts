@@ -1,8 +1,8 @@
 /// <reference lib="webworker" />
 import { db, type TranscriptToken } from '../lib/db';
 import { TARGET_SAMPLE_RATE, DEFAULT_MODEL, isMultilingual, type ModelId } from '../lib/audio';
-import { HypothesisBuffer } from '../lib/transcription/hypothesisBuffer';
-import { isHallucinationLine, isSilent, rms } from '../lib/transcription/heuristics';
+import { HypothesisBuffer, type TimedWord } from '../lib/transcription/hypothesisBuffer';
+import { isHallucinationLine, isSentenceEnd, isSilent, rms } from '../lib/transcription/heuristics';
 import {
   createPipeline,
   detectBackend,
@@ -11,8 +11,7 @@ import {
 } from '../lib/transcription/whisperAdapter';
 
 // Window-size policy. Whisper is trained on 30 s windows. Growth beyond
-// MAX_WINDOW_S is bounded by a force-slide safety net. The anchor advances
-// naturally as words get committed via LA-2.
+// MAX_WINDOW_S is bounded by a force-slide safety net.
 //
 // MIN_WINDOW_S = 0 means "run on the first chunk available". User-feedback
 // optimisation: a grey wrong word at t=1.3s is better than 3 s of empty UI
@@ -22,6 +21,19 @@ import {
 const MIN_WINDOW_S = 0;
 const MIN_DRAIN_WINDOW_S = 0; // drain everything left in the buffer on Stop
 const MAX_WINDOW_S = 24.0;
+
+// Audio anchor advancement policy. We do NOT advance on every committed word
+// (that strips intra-sentence context Whisper needs for accuracy on smaller
+// models). Instead:
+//   1. Trim only when the latest committed word ends a sentence.
+//   2. Even then, keep CONTEXT_LOOKBACK_S of already-transcribed audio in the
+//      window so Whisper has acoustic context for the next inference.
+//   3. If the window grows past FAST_TRIM_THRESHOLD_S without a sentence end
+//      (long unpunctuated monologue), trim anyway, with the same look-back.
+//      Without this, inference time blows up and we fall behind real-time.
+// MAX_WINDOW_S still applies as the absolute safety net (force-slide).
+const CONTEXT_LOOKBACK_S = 5.0;
+const FAST_TRIM_THRESHOLD_S = 10.0;
 
 type InMessage =
   | { type: 'init'; modelId: ModelId }
@@ -179,6 +191,17 @@ async function advanceAnchor(toS: number) {
   await db.chunks.where('startedAt').below(committedAudioStartS).delete();
 }
 
+/**
+ * Scan `committed` from the end and return the end time of the latest
+ * sentence-ending word. Returns 0 if no committed word ends a sentence.
+ */
+function findLatestSentenceEnd(committed: readonly TimedWord[]): number {
+  for (let i = committed.length - 1; i >= 0; i--) {
+    if (isSentenceEnd(committed[i].text)) return committed[i].end;
+  }
+  return 0;
+}
+
 async function runOnce(minDur: number = MIN_WINDOW_S) {
   lastTickKind = 'idle';
   lastWindowDurationS = 0;
@@ -221,14 +244,18 @@ async function runOnce(minDur: number = MIN_WINDOW_S) {
   log(`[consumer] dur=${dur.toFixed(2)}s rms=${rms(audio.samples).toFixed(3)} text="${result.text.slice(0, 120)}"`);
 
   if (isHallucinationLine(result.text)) {
-    // Treat hallucination the same as silence: pin tentative, advance anchor,
-    // and discard chunks. Without this, the chunks accumulate, audio keeps
-    // growing past MAX_WINDOW_S, and force-slide eventually pins junk.
-    const committed = hypBuffer.forceCommit();
-    await writeTranscript();
-    await advanceAnchor(audio.t1);
+    // We already passed the silence gate above, so this audio has real
+    // energy. A hallucinated line on real audio is a *model* failure (small
+    // model + short context), not an empty audio segment. Discarding here
+    // would throw away genuinely-spoken words: e.g. on a 1 s window of "I
+    // also literally let's dive right in" tiny.en often emits " >>" which
+    // matches the hallucination filter.
+    //
+    // Don't advance the anchor. Don't force-commit. Let the audio buffer
+    // grow so the next tick has more context. MAX_WINDOW_S force-slide is
+    // the safety net if Whisper keeps producing junk for too long.
     lastTickKind = 'hallucination';
-    log(`[consumer] hallucination force-committed=${committed.length} text="${result.text.slice(0, 80)}"`);
+    log(`[consumer] hallucination on non-silent audio, deferring text="${result.text.slice(0, 80)}"`);
     return;
   }
 
@@ -240,21 +267,31 @@ async function runOnce(minDur: number = MIN_WINDOW_S) {
       `committed=${hypBuffer.getCommitted().length} tentative=${hypBuffer.getTentative().length}`
   );
 
-  // Advance the audio anchor to the last committed word's end time so the
-  // next inference only sees uncommitted audio. Whisper re-transcribing 30 s
-  // every tick is wasteful and amplifies revision wobble.
-  const lastT = hypBuffer.getLastCommittedTime();
-  if (lastT > committedAudioStartS) {
-    await advanceAnchor(lastT);
+  // Audio anchor advancement: preserve intra-sentence context for accuracy.
+  //
+  // Trigger conditions (in order):
+  //   - A sentence-ending committed word exists: trim to (sentence-end -
+  //     CONTEXT_LOOKBACK_S) so Whisper keeps recent acoustic context.
+  //   - Window has grown past FAST_TRIM_THRESHOLD_S: trim mid-sentence to
+  //     keep up with real-time, still preserving CONTEXT_LOOKBACK_S.
+  //   - Neither: leave anchor alone. The window grows. MAX_WINDOW_S catches
+  //     pathological cases.
+  const sentenceEnd = findLatestSentenceEnd(hypBuffer.getCommitted());
+  if (sentenceEnd > 0) {
+    const target = sentenceEnd - CONTEXT_LOOKBACK_S;
+    if (target > committedAudioStartS) await advanceAnchor(target);
+  } else if (dur > FAST_TRIM_THRESHOLD_S) {
+    const target = hypBuffer.getLastCommittedTime() - CONTEXT_LOOKBACK_S;
+    if (target > committedAudioStartS) await advanceAnchor(target);
   }
 
-  // Force-slide safety net at MAX_WINDOW_S. With LA-2 advancing the anchor
-  // naturally on every commit, this fires rarely: only when Whisper keeps
-  // revising and no word ever stabilises (e.g. continuous mumbled speech).
+  // Force-slide safety net at MAX_WINDOW_S. Only fires when Whisper keeps
+  // revising and nothing commits, OR when a single sentence is so long that
+  // the trim threshold above doesn't help (continuous unpunctuated speech).
   if (dur > MAX_WINDOW_S) {
     const committed = hypBuffer.forceCommit();
     await writeTranscript();
-    await advanceAnchor(audio.t1);
+    await advanceAnchor(audio.t1 - CONTEXT_LOOKBACK_S);
     lastTickKind = 'force-slide';
     log(`[consumer] force-slide dur=${dur.toFixed(2)}s force-committed=${committed.length}`);
   }

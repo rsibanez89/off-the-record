@@ -59,7 +59,11 @@ The live consumer uses the **LocalAgreement-2** algorithm (Macháček, Dabre, Bo
 
 - Whisper is not used as a true streaming model. The consumer repeatedly transcribes a growing audio window.
 - Minimum live window: 0 seconds (run on the first chunk for fast feedback). Stop drain window: 0 seconds (transcribe whatever is left on Stop). Maximum window: 24 seconds.
-- `committedAudioStartS` anchors the left edge of audio that still needs transcription. It advances every time LocalAgreement-2 commits a word, to the end-time of the last committed word.
+- `committedAudioStartS` anchors the left edge of audio that still needs transcription. **Anchor advancement is conservative: it preserves intra-sentence acoustic context for Whisper.**
+  - Trim only when the latest committed word ends a sentence (`.`, `?`, `!`). Target: `sentence_end_time - CONTEXT_LOOKBACK_S` (default 5 s).
+  - Secondary cap: if the window grows past `FAST_TRIM_THRESHOLD_S` (default 10 s) without a sentence end, trim anyway to `last_committed_end - CONTEXT_LOOKBACK_S`. Prevents inference from falling behind real-time on long unpunctuated speech.
+  - MAX_WINDOW_S force-slide still fires as the absolute safety net (commits whatever is in `tentative`, trims to `audio.t1 - CONTEXT_LOOKBACK_S`).
+  - Rationale: aggressive per-word trimming (anchor to last-committed-word end time) strips context Whisper needs for accuracy, especially on `tiny.en` and `base.en`. Verified empirically against the batch panel.
 - The `HypothesisBuffer` class (`src/lib/transcription/hypothesisBuffer.ts`) holds two queues:
   - `committed`: permanently confirmed words. Render as `isFinal:1` (black). Never revert.
   - `tentative`: the surviving tail of the previous iteration's hypothesis. Render as `isFinal:0` (grey).
@@ -69,7 +73,8 @@ The live consumer uses the **LocalAgreement-2** algorithm (Macháček, Dabre, Bo
   3. Walk the new hypothesis and `tentative` in parallel. Every word that matches (case- and punctuation-normalised) graduates to `committed`. Stop at the first mismatch. The surviving tail of the new hypothesis becomes the next `tentative`.
 - **Once a word is committed it is monotonically stable.** No flicker back to grey.
 - Standalone dash artefacts and known hallucination fillers are filtered at the word and line level.
-- Silence (RMS below threshold) and full-line hallucinations force-commit any tentative buffer, advance the anchor past the silent / junk region, and discard the chunks.
+- Silence (RMS below threshold) force-commits any tentative buffer, advances the anchor past the silent region, and discards those chunks. Silent audio carries no transcribable content.
+- Full-line hallucinations are detected AFTER the silence gate, so by definition they fire on non-silent audio. This means the model has failed (small model + short context), not that the audio is empty. The handler does NOT advance the anchor and does NOT discard chunks; it just defers the tick and lets the audio buffer grow so the next inference has more context. If hallucinations persist long enough that the window exceeds `MAX_WINDOW_S`, the force-slide safety net commits and trims.
 - A `MAX_WINDOW_S` safety net force-slides if the window grows beyond 24 s without any natural commit (continuous unstable speech).
 - On `stop`, the consumer drains available chunks through LocalAgreement-2 until the state settles or the safety cap fires, force-commits any remaining tentative buffer, rewrites the transcript as final, clears chunks, and posts `flush-done`.
 
