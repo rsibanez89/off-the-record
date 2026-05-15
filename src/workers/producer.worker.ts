@@ -7,7 +7,18 @@ type InMessage =
   | { type: 'frame'; samples: Float32Array }
   | { type: 'stop' };
 
-type OutMessage = { type: 'started' } | { type: 'stopped' } | { type: 'error'; message: string };
+type OutMessage =
+  | { type: 'started' }
+  | { type: 'stopped' }
+  | { type: 'error'; message: string }
+  | {
+      type: 'stats';
+      totalChunksWritten: number;
+      accumSamples: number;
+      running: boolean;
+      sourceSampleRate: number;
+      lastChunkAt: number;
+    };
 
 const wakeup = new BroadcastChannel('new-chunk');
 
@@ -16,6 +27,12 @@ let resampleRatio = 1;
 let accum: number[] = [];
 let chunkStartedAt = 0;
 let running = false;
+
+// Dev stats. Lifetime counters since the most recent 'start'. UI computes rate
+// from successive snapshots.
+let totalChunksWritten = 0;
+let lastChunkAt = 0;
+let statsTimer: number | null = null;
 
 // Resampler state. `resamplePos` is the next emit position in the current
 // frame's local coordinates (it can be negative, meaning "between the previous
@@ -26,6 +43,17 @@ let prevTail = 0;
 
 function postOut(msg: OutMessage) {
   (self as DedicatedWorkerGlobalScope).postMessage(msg);
+}
+
+function postStats() {
+  postOut({
+    type: 'stats',
+    totalChunksWritten,
+    accumSamples: accum.length,
+    running,
+    sourceSampleRate: sourceRate,
+    lastChunkAt,
+  });
 }
 
 // Linear-interp resample from sourceRate to TARGET_SAMPLE_RATE. Treats
@@ -59,8 +87,17 @@ async function flushChunkIfReady() {
     const startedAt = chunkStartedAt;
     chunkStartedAt += CHUNK_SAMPLES / TARGET_SAMPLE_RATE;
     try {
-      await db.chunks.add({ startedAt, samples });
+      // Write to both tables in one transaction. The live consumer evicts
+      // chunks past its committed-audio anchor; audioArchive keeps the full
+      // recording for the batch worker to read on Stop.
+      await db.transaction('rw', db.chunks, db.audioArchive, async () => {
+        await db.chunks.add({ startedAt, samples });
+        await db.audioArchive.add({ startedAt, samples });
+      });
       wakeup.postMessage({ type: 'new-chunk' });
+      totalChunksWritten++;
+      lastChunkAt = performance.now();
+      postStats();
     } catch (err) {
       postOut({ type: 'error', message: `db write failed: ${(err as Error).message}` });
     }
@@ -77,7 +114,15 @@ self.onmessage = async (e: MessageEvent<InMessage>) => {
     prevTail = 0;
     chunkStartedAt = performance.now() / 1000;
     running = true;
+    totalChunksWritten = 0;
+    lastChunkAt = 0;
+    if (statsTimer === null) {
+      // 500 ms is fine-grained enough to show the accum buffer filling between
+      // chunk writes, but cheap enough not to flood the main thread.
+      statsTimer = (self as DedicatedWorkerGlobalScope).setInterval(postStats, 500) as unknown as number;
+    }
     postOut({ type: 'started' });
+    postStats();
     return;
   }
   if (msg.type === 'frame') {
@@ -91,6 +136,11 @@ self.onmessage = async (e: MessageEvent<InMessage>) => {
     // Drop any partial sub-second remainder; the window will pick up final audio
     // from the last full chunk already written.
     accum = [];
+    if (statsTimer !== null) {
+      clearInterval(statsTimer);
+      statsTimer = null;
+    }
+    postStats();
     postOut({ type: 'stopped' });
     return;
   }

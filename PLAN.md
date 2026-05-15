@@ -6,55 +6,93 @@ You are an expert in offline speech recognition and Whisper. You know transforme
 
 ## Goal
 
-A web app that records the mic and shows a live transcript powered by Whisper running locally in the browser. The app prefers WebGPU when available and falls back to WASM. Audio capture starts on the main thread, raw samples are sent through an AudioWorklet, and chunking/transcription are handled by two independent Web Workers. The producer and consumer coordinate through IndexedDB for audio payloads, with `BroadcastChannel('new-chunk')` used only as a wake-up signal.
+A web app that records the mic and shows **two transcripts at once** for direct comparison:
 
-## Architecture (three layers)
+- 🟢 **Live transcript** powered by a streaming LocalAgreement-2 over Whisper.
+- 🔵 **Batch transcript** produced by a single Whisper pass on the full audio, triggered when the user presses Stop.
+
+Each panel has its own model picker, so the same audio can be transcribed by two different models (or the same model with two different algorithms).
+
+The app prefers WebGPU when available and falls back to WASM. Audio capture starts on the main thread, raw samples are sent through an AudioWorklet, and chunking/transcription are handled by three independent Web Workers. The producer and live consumer coordinate through IndexedDB for audio payloads, with `BroadcastChannel('new-chunk')` used only as a wake-up signal. The batch worker is triggered by a direct message from the main thread on Stop.
+
+## Architecture (four parts)
 
 - **Producer worker** (`producer.worker.ts`)
   - Receives raw context-rate `Float32Array` frames from the main thread.
   - Linearly resamples to 16 kHz mono and buffers into 1-second chunks.
-  - Flushes each chunk to IDB: `db.chunks.add({ startedAt, samples })`.
+  - Writes each chunk to **two** IDB tables in one transaction:
+    - `db.chunks`: live, evictable (the live consumer deletes as the anchor advances).
+    - `db.audioArchive`: kept until next Record or Clear (input to the batch worker).
   - Posts `BroadcastChannel('new-chunk')` as a wake-up notification only. Audio payload never leaves IDB after this write.
-  - Acknowledges `stop` with `stopped` so the main thread can wait before flushing the consumer.
+  - Acknowledges `stop` with `stopped` so the main thread can wait before flushing the consumer and before triggering the batch run.
 
-- **Consumer worker** (`consumer.worker.ts`)
-  - Lazy-loads the Whisper pipeline using transformers.js.
-  - Detects WebGPU, otherwise uses WASM.
+- **Live consumer worker** (`consumer.worker.ts`)
+  - Lazy-loads the Whisper pipeline using transformers.js via `whisperAdapter.createPipeline`.
+  - Detects WebGPU, otherwise uses WASM (`whisperAdapter.detectBackend`).
   - Uses fp32 encoder for non-turbo checkpoints, fp16 encoder for `large-v3-turbo` on WebGPU, and q4 merged decoder.
-  - On wake-up: collects chunks from `committedAudioStartS` onward and runs inference once enough audio is available.
-  - Applies inline longest-common-prefix stability against the previous hypothesis for final-vs-tentative colouring.
-- Reconciles `db.transcript` from in-memory `committedWords`, stable words, and volatile words. It writes new rows before deleting excess rows so the UI does not flash through an empty/short table on every inference tick.
-  - Deletes audio chunks older than the committed audio anchor.
+  - On wake-up: collects chunks from `committedAudioStartS` onward and runs inference.
+  - Feeds Whisper output to the `HypothesisBuffer` (LocalAgreement-2).
+  - Reconciles `db.transcript` from the buffer's committed and tentative queues. Writes new rows before deleting excess rows so the UI does not flash through an empty/short table on every inference tick.
+  - Deletes audio chunks from `db.chunks` older than the committed audio anchor. `db.audioArchive` is untouched.
   - Acknowledges `reset` with `reset-done` and `flush` with `flush-done`.
+
+- **Batch worker** (`batch.worker.ts`)
+  - Lazy-loads its own Whisper pipeline (same helpers as the live consumer; independent model selection).
+  - On `transcribe { sessionId }`:
+    - Loads the entire `db.audioArchive` table.
+    - Concatenates chunks into one `Float32Array`.
+    - Runs Whisper once with `return_timestamps: 'word'` and `chunk_length_s: 30` (transformers.js handles longer audio via overlapping windows).
+    - Posts `transcribe-done { sessionId, tokens, durationS, inferenceMs }`.
+  - Session IDs let the main thread ignore late results from a superseded batch run (e.g. the user clicked Record again while batch was still going).
 
 - **Main thread (React)**
   - Calls `getUserMedia`, owns `AudioContext`, loads `/audio-worklet.js`, and forwards worklet frames to the producer worker.
-  - Renders display tokens sent directly by the consumer worker, with `db.transcript` via `dexie-react-hooks` `useLiveQuery` as the initial/fallback source.
-  - Renders one `<span>` per token. `isFinal:true` becomes strong black. `isFinal:false` becomes soft grey.
+  - Spawns and supervises three workers: producer, live consumer, batch.
+  - Renders two `TranscriptPanel`s side by side, each with its own model picker.
+  - Header has only Record / Stop / Clear. Backend pill and model picker are inside each `TranscriptPanel`.
   - Waveform: separate `AnalyserNode` on the live mic stream. Not via IDB. Visual must be zero-lag.
-  - Model picker plus Record/Stop/Clear.
-  - Stop enters a `stopping` state and waits for producer `stopped` and consumer `flush-done` before allowing another recording.
+  - Stop enters a `stopping` state, waits for producer `stopped` and live consumer `flush-done`, then triggers the batch worker. Batch runs in the background and updates the right panel when it finishes.
 
-## Streaming transcript strategy
+## Streaming transcript strategy: LocalAgreement-2
+
+The live consumer uses the **LocalAgreement-2** algorithm (Macháček, Dabre, Bojar 2023; the reference implementation is `ufal/whisper_streaming`). Whisper is run with `return_timestamps: 'word'` so we have per-word timestamps.
 
 - Whisper is not used as a true streaming model. The consumer repeatedly transcribes a growing audio window.
-- Minimum live window: 3 seconds. Stop drain window: 1.5 seconds. Maximum window: 24 seconds.
-- `committedAudioStartS` anchors the left edge of audio that still needs transcription.
-- `committedWords` stores permanently committed transcript words across recording sessions.
-- `prevHypothesis` stores the previous inference result for the current audio region.
-- The consumer computes a longest common prefix between `prevHypothesis` and the current hypothesis.
-- Prefix words are written as `isFinal:1`; the rest are written as `isFinal:0`.
-- If the whole hypothesis is stable for two consecutive ticks, the consumer commits it, advances the audio anchor to the end of that window, clears consumed chunks, and starts fresh.
-- Whenever words are permanently committed, the consumer de-duplicates overlap by comparing the tail of `committedWords` with the head of the new hypothesis and appending only the non-overlapping suffix.
-- At the maximum window, the consumer commits the whole current hypothesis and restarts the audio window after it as a fallback. Whisper does not provide word timestamps in this mode, so the app avoids guessing how to split words by audio fraction.
-- Standalone leading dash artifacts from Whisper, such as `- Absolutely`, are ignored during tokenization/stability checks so formatting jitter does not prevent a stable commit.
-- Silence and common Whisper filler/hallucination outputs commit the previous hypothesis, advance the anchor, and drop consumed chunks.
-- On `stop`, the consumer drains available chunks, folds the final hypothesis into `committedWords`, rewrites the transcript as final, clears chunks, and posts `flush-done`.
+- Minimum live window: 0 seconds (run on the first chunk for fast feedback). Stop drain window: 0 seconds (transcribe whatever is left on Stop). Maximum window: 24 seconds.
+- `committedAudioStartS` anchors the left edge of audio that still needs transcription. It advances every time LocalAgreement-2 commits a word, to the end-time of the last committed word.
+- The `HypothesisBuffer` class (`src/lib/transcription/hypothesisBuffer.ts`) holds two queues:
+  - `committed`: permanently confirmed words. Render as `isFinal:1` (black). Never revert.
+  - `tentative`: the surviving tail of the previous iteration's hypothesis. Render as `isFinal:0` (grey).
+- On each inference tick:
+  1. Drop words from the new hypothesis whose end is before the last committed boundary (timestamp jitter tolerance: 0.1 s).
+  2. Run 5-gram tail dedup between the committed transcript's tail and the new hypothesis's head to strip re-emitted overlap.
+  3. Walk the new hypothesis and `tentative` in parallel. Every word that matches (case- and punctuation-normalised) graduates to `committed`. Stop at the first mismatch. The surviving tail of the new hypothesis becomes the next `tentative`.
+- **Once a word is committed it is monotonically stable.** No flicker back to grey.
+- Standalone dash artefacts and known hallucination fillers are filtered at the word and line level.
+- Silence (RMS below threshold) and full-line hallucinations force-commit any tentative buffer, advance the anchor past the silent / junk region, and discard the chunks.
+- A `MAX_WINDOW_S` safety net force-slides if the window grows beyond 24 s without any natural commit (continuous unstable speech).
+- On `stop`, the consumer drains available chunks through LocalAgreement-2 until the state settles or the safety cap fires, force-commits any remaining tentative buffer, rewrites the transcript as final, clears chunks, and posts `flush-done`.
+
+## Batch transcript strategy
+
+The batch worker runs **only on Stop**. It takes the entire `audioArchive` table, concatenates the chunks, and runs Whisper once. No streaming, no buffer, no agreement protocol. The result is a single rendered token list that populates the right panel.
+
+- Same `return_timestamps: 'word'` and same `runWhisper` adapter as the live consumer.
+- `chunk_length_s: 30` lets transformers.js handle longer-than-30s audio via internal windowing.
+- All output tokens are `isFinal: 1` (black). There is no notion of tentative in a one-shot run.
+- A `sessionId` accompanies each transcribe request. The main thread bumps it on Clear / new Record, so any late result from a superseded run is dropped.
+
+## Session lifecycle
+
+- **Record**: wipes both transcripts, resets the live consumer's in-memory state via `reset` + `reset-done`, calls `clearAll()` (drops `chunks`, `transcript`, `audioArchive`), bumps the batch session ID, then starts capture.
+- **Stop**: stops capture, awaits producer `stopped`, awaits live consumer `flush-done`, sends `transcribe { sessionId }` to the batch worker (does not await; batch updates the right panel asynchronously).
+- **Clear**: same reset flow as Record but without starting capture.
+- Each Record session is independent. Live and batch transcripts are scoped to one recording.
 
 ## Tech stack
 
 - Vite plus React 19 plus TypeScript.
-- Tailwind. Minimalist: large transcript area, small waveform strip, one model dropdown.
+- Tailwind. Minimalist: two transcript panels side by side, small waveform strip, dev panel below.
 - `@huggingface/transformers` (v3+) for Whisper inference.
 - Dexie for IndexedDB. `lucide-react` for icons.
 - No router, no state library. Dexie `liveQuery` plus React state is enough.
@@ -62,17 +100,21 @@ A web app that records the mic and shows a live transcript powered by Whisper ru
 ## Storage rules
 
 - **Model weights live in the Cache API**, not IDB. IDB silently fails past ~1 GB on some browsers; Whisper shards exceed that. transformers.js handles this automatically. Do NOT override its caching.
-- **Audio chunks live in IDB** (Dexie). Each chunk is small (<200 KB at 16 kHz mono Float32, 1 s).
-- **Transcript tokens live in IDB**.
-- Drop chunks older than the current window's tail to bound storage.
+- **`db.chunks`**: 1-second audio chunks for the live consumer. Evicted as the committed-audio anchor advances.
+- **`db.audioArchive`**: 1-second audio chunks kept until next Record or Clear. Input to the batch worker. Each chunk is small (<200 KB at 16 kHz mono Float32, 1 s).
+- **`db.transcript`**: live transcript tokens. Reconciled on each inference tick.
+- `clearAll()` drops all three IDB tables.
+- Cache API weights are shared across panels when the model ID matches. Different models means two parallel downloads and two pipelines loaded in memory.
 
 ## Model picker
 
-- Three options minimum, dropdown in UI:
-  - `onnx-community/whisper-tiny.en` (fast, weaker)
-  - `onnx-community/whisper-base.en`
-  - `onnx-community/whisper-large-v3-turbo` (slower first load, best quality)
-- Selection persisted in `localStorage`. Changing model: terminate then respawn consumer worker.
+- Three options, dropdown in each panel:
+  - `onnx-community/whisper-tiny.en_timestamped` (fast, weaker)
+  - `onnx-community/whisper-base.en_timestamped` (default for both panels)
+  - `onnx-community/whisper-large-v3-turbo_timestamped` (slower first load, best quality)
+- All entries are `_timestamped` ONNX exports. The non-timestamped variants do not include cross-attention outputs, which transformers.js needs to compute word-level timestamps via DTW. LocalAgreement-2 depends on those word timestamps.
+- Selection persisted in `localStorage`. Two keys: `off-the-record:model` (live) and `off-the-record:batch-model` (batch).
+- Changing a model: terminate then respawn the matching worker.
 - Show download progress on first load (transformers.js exposes a progress callback).
 
 ## File layout
@@ -80,9 +122,22 @@ A web app that records the mic and shows a live transcript powered by Whisper ru
 ```
 src/
 ├── main.tsx, App.tsx
-├── components/   Transcript.tsx, Waveform.tsx, ModelPicker.tsx
-├── workers/      producer.worker.ts, consumer.worker.ts
-└── lib/          db.ts (Dexie), audio.ts
+├── components/
+│   ├── TranscriptPanel.tsx   transcript + per-panel model picker + status badge
+│   ├── Waveform.tsx
+│   ├── ModelPicker.tsx
+│   └── DevPanel.tsx
+├── workers/
+│   ├── producer.worker.ts    audio capture, resample, dual-table writes
+│   ├── consumer.worker.ts    live LocalAgreement-2 streaming
+│   └── batch.worker.ts       one-shot Whisper on Stop
+└── lib/
+    ├── db.ts                  Dexie schema, clearAll
+    ├── audio.ts               models, sample rate, isMultilingual, isTurbo
+    └── transcription/
+        ├── hypothesisBuffer.ts   LocalAgreement-2 (pure algorithm)
+        ├── heuristics.ts          silence / hallucination detection
+        └── whisperAdapter.ts      pipeline creation, backend detection, runWhisper
 
 public/
 └── audio-worklet.js
@@ -95,17 +150,23 @@ Plus root: `index.html`, `vite.config.ts` (COOP/COEP headers), `package.json`, `
 - **COOP/COEP headers required** for `SharedArrayBuffer` (transformers.js needs it). Vite dev server must set `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`.
 - **q4 on the encoder destroys accuracy** in noise/accents. Use `q4` on `decoder_model_merged` only. Keep the encoder at `fp32` except for `large-v3-turbo` on WebGPU, where a published `fp16` encoder is used.
 - **WebGPU adapter check** on startup. Fall back to WASM with a visible warning.
-- **Producer and consumer must stay decoupled for audio payloads.** IDB is the audio contract; `BroadcastChannel` is only a wake-up.
-- **Do not allow Record during stop flush.** The UI must wait for producer `stopped` and consumer `flush-done`, otherwise old and new transcript rewrites can flicker.
-- **No separate stability module.** The longest-common-prefix stability logic currently lives inline in `consumer.worker.ts`; do not extract a helper unless there is a real reuse need.
+- **Producer and live consumer must stay decoupled for audio payloads.** IDB is the audio contract; `BroadcastChannel` is only a wake-up.
+- **Batch worker is triggered by direct message**, not via `BroadcastChannel`. The wake-up channel is exclusive to the live pipeline.
+- **Do not allow Record during stop flush.** The UI must wait for producer `stopped` and live consumer `flush-done`, otherwise old and new transcript rewrites can flicker.
+- **`HypothesisBuffer` owns the LocalAgreement-2 algorithm.** Keep it pure: no Whisper, no Dexie, no async, no timers. The consumer worker is the orchestrator.
+- **`return_timestamps: 'word'` is required** for LocalAgreement-2. Whisper words without timestamps are dropped (their position is unreliable).
+- **Use `_timestamped` model variants only.** The default `onnx-community/whisper-*` ONNX exports do not include cross-attention outputs, and `return_timestamps: 'word'` throws `Model outputs must contain cross attentions to extract timestamps`.
+- **Batch worker uses `sessionId` to ignore late results.** If the user clicks Record while a batch transcribe is in flight, the new session ID makes the eventual response a no-op.
 
 ## Verification
 
-- Smoke test: record 10 s of speech. Soft grey text settles into strong black once consecutive hypotheses agree.
-- Record, stop, record, stop: all words stay in one transcript, with no flicker between previous-only/current-only and combined output.
-- Clear while stopped and while recording: transcript and worker in-memory state both reset.
-- Swap model: consumer respawns and starts with a fresh transcript/chunk state.
+- Smoke test: record 10 s of speech. The live panel streams words grey, then commits to black as LA-2 confirms. The right panel stays empty until Stop, then renders the batch transcript.
+- Stop a recording with > 3 s of audio: batch panel shows `done · Xms / Ys` in the status badge.
+- Compare panels: pick different models per panel, record once, and observe how the algorithms diverge on the same audio.
+- Clear while stopped and while recording: both transcripts and the consumer's in-memory state reset.
+- Record, stop, Record: a new Record wipes the previous session (live, batch, and audioArchive). The two transcripts are scoped to one recording.
+- Swap a panel's model: only that panel's worker respawns. The other panel and any in-progress recording are unaffected.
 
 ## Out of scope
 
-Diarization, language UI, export, mobile layout, auth, sync. POC only.
+Diarization, language UI, transcript export, mobile layout, auth, sync. POC only.
