@@ -11,7 +11,7 @@ import {
 
 type InMessage =
   | { type: 'start'; sourceSampleRate: number }
-  | { type: 'frame'; samples: Float32Array }
+  | { type: 'frame'; samples: Float32Array; sampleRate?: number }
   | { type: 'stop' };
 
 type OutMessage =
@@ -198,6 +198,15 @@ self.onmessage = async (e: MessageEvent<InMessage>) => {
   }
   if (msg.type === 'frame') {
     if (!running || !resampler) return;
+    // If the AudioContext sample rate changes mid-stream (rare, but
+    // possible on device switch on macOS), rebuild the resampler so the
+    // 16 kHz target stream stays correct. Forward-only check: a one-time
+    // rebuild is fine; the previous resampler's tail state is discarded
+    // along with the old ratio.
+    if (msg.sampleRate != null && msg.sampleRate !== sourceRate) {
+      sourceRate = msg.sampleRate;
+      resampler = new LinearResampler(sourceRate, TARGET_SAMPLE_RATE);
+    }
     const resampled = resampler.process(msg.samples);
     appendToChunkRing(resampled);
     // VAD runs on the 16 kHz resampled stream in 512-sample frames. Awaiting

@@ -249,8 +249,11 @@ export default function App() {
       producer.postMessage({ type: 'start', sourceSampleRate: ctx.sampleRate });
 
       node.port.onmessage = (e) => {
-        const { samples } = e.data;
-        producer.postMessage({ type: 'frame', samples }, [samples.buffer]);
+        const { samples, sampleRate } = e.data;
+        producer.postMessage(
+          { type: 'frame', samples, sampleRate },
+          [samples.buffer],
+        );
       };
 
       setStatus('recording');
