@@ -29,3 +29,4 @@ pnpm-debug.log*
 # integration-test candidate snapshots (per-run output of the bench harness;
 # the committed baseline lives at tests/integration/baselines.json)
 tests/integration/.bench/
+tests/matrix/.output/
