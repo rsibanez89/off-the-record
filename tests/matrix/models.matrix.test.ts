@@ -19,12 +19,19 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { MODELS, isMultilingual, supportsWordTimestamps, type ModelId } from '../../src/lib/audio';
+import {
+  MODELS,
+  isMultilingual,
+  streamingPolicyFor,
+  supportsWordTimestamps,
+  type ModelId,
+} from '../../src/lib/audio';
 import { runWhisper } from '../../src/lib/transcription/whisperAdapter';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createNodeWhisperPipeline } from '../integration/lib/whisperNode';
-import { loadGroundtruth, loadWav16kMono } from '../integration/lib/fixture';
+import { chunkIntoSeconds, loadGroundtruth, loadWav16kMono } from '../integration/lib/fixture';
 import { wer, normalizeForScoring } from '../integration/lib/metrics';
+import { runNativeOnFixture } from '../integration/lib/runNativeOnFixture';
 
 const FIXTURE_DIR = join(__dirname, '..', 'fixtures');
 
@@ -43,6 +50,9 @@ const FIXTURES: Array<{ id: string; wav: string; json: string }> = [
 interface MatrixRow {
   modelId: ModelId;
   fixtureId: string;
+  /** Which path produced this row: `oneshot` (runWhisper directly) or
+   * `native-streaming` (NativeStreamingLoop end-to-end). */
+  path: 'oneshot' | 'native-streaming';
   durationS: number;
   inferenceMs: number;
   wordCount: number;
@@ -90,6 +100,7 @@ describe('Model matrix vs multiple fixtures', () => {
           rows.push({
             modelId: m.id,
             fixtureId: f.id,
+            path: 'oneshot',
             durationS: audio.durationS,
             inferenceMs,
             wordCount: result.words.length,
@@ -97,7 +108,7 @@ describe('Model matrix vs multiple fixtures', () => {
             transcript,
           });
           /* eslint-disable no-console */
-          console.log(`\n  ===== ${m.id} / ${f.id} (${audio.durationS.toFixed(1)} s) =====`);
+          console.log(`\n  ===== ${m.id} / ${f.id} oneshot (${audio.durationS.toFixed(1)} s) =====`);
           console.log(`  WER       : ${(werResult.rate * 100).toFixed(2)}%`);
           console.log(`  words     : ${result.words.length}`);
           console.log(`  inference : ${inferenceMs.toFixed(0)} ms`);
@@ -108,6 +119,58 @@ describe('Model matrix vs multiple fixtures', () => {
           rows.push({
             modelId: m.id,
             fixtureId: f.id,
+            path: 'oneshot',
+            durationS: fixtures[f.id]?.audio.durationS ?? 0,
+            inferenceMs: performance.now() - t0,
+            wordCount: 0,
+            werRate: 1,
+            transcript: '',
+            error: (err as Error).message,
+          });
+          throw err;
+        }
+      }, 600_000);
+    }
+  }
+
+  // Native-streaming end-to-end: drives `NativeStreamingLoop` (production
+  // live path for streaming-policy models) with chunked audio, so the
+  // matrix can compare native-streaming WER vs the one-shot baseline.
+  // Only models with `streamingPolicy === 'native'` exercise this path.
+  for (const m of MODELS) {
+    if (streamingPolicyFor(m.id) !== 'native') continue;
+    for (const f of FIXTURES) {
+      it(`${m.id} on ${f.id} (native streaming)`, async () => {
+        const t0 = performance.now();
+        try {
+          const pipeline = await createNodeWhisperPipeline(m.id);
+          const { audio, groundtruth } = fixtures[f.id];
+          const chunks = chunkIntoSeconds(audio.samples, audio.sampleRateHz);
+          const run = await runNativeOnFixture({ pipeline, modelId: m.id, chunks });
+          const werResult = wer(groundtruth.transcript, run.liveTranscript);
+          const inferenceMs = performance.now() - t0;
+          rows.push({
+            modelId: m.id,
+            fixtureId: f.id,
+            path: 'native-streaming',
+            durationS: audio.durationS,
+            inferenceMs,
+            wordCount: run.liveTranscript.split(/\s+/).filter((s) => s.length > 0).length,
+            werRate: werResult.rate,
+            transcript: run.liveTranscript,
+          });
+          /* eslint-disable no-console */
+          console.log(`\n  ===== ${m.id} / ${f.id} native-streaming (${audio.durationS.toFixed(1)} s) =====`);
+          console.log(`  WER       : ${(werResult.rate * 100).toFixed(2)}%`);
+          console.log(`  inference : ${inferenceMs.toFixed(0)} ms (total across ${run.ticks.length} ticks)`);
+          console.log(`  transcript: ${normalizeForScoring(run.liveTranscript).slice(0, 200)}`);
+          /* eslint-enable no-console */
+          expect(run.liveTranscript.length).toBeGreaterThan(0);
+        } catch (err) {
+          rows.push({
+            modelId: m.id,
+            fixtureId: f.id,
+            path: 'native-streaming',
             durationS: fixtures[f.id]?.audio.durationS ?? 0,
             inferenceMs: performance.now() - t0,
             wordCount: 0,
@@ -127,8 +190,8 @@ describe('Model matrix vs multiple fixtures', () => {
     const lines: string[] = [];
     lines.push('# Model matrix');
     lines.push('');
-    lines.push('| Model | Fixture | Duration (s) | WER | Words | Inference (ms) | Status |');
-    lines.push('|---|---|---|---|---|---|---|');
+    lines.push('| Model | Fixture | Path | Duration (s) | WER | Words | Inference (ms) | Status |');
+    lines.push('|---|---|---|---|---|---|---|---|');
     for (const r of rows) {
       const status = r.error
         ? `❌ ${r.error.slice(0, 80)}`
@@ -138,14 +201,14 @@ describe('Model matrix vs multiple fixtures', () => {
             ? '⚠️ borderline'
             : '❌ garbage';
       lines.push(
-        `| \`${r.modelId}\` | ${r.fixtureId} | ${r.durationS.toFixed(1)} | ${(r.werRate * 100).toFixed(1)}% | ${r.wordCount} | ${r.inferenceMs.toFixed(0)} | ${status} |`,
+        `| \`${r.modelId}\` | ${r.fixtureId} | ${r.path} | ${r.durationS.toFixed(1)} | ${(r.werRate * 100).toFixed(1)}% | ${r.wordCount} | ${r.inferenceMs.toFixed(0)} | ${status} |`,
       );
     }
     lines.push('');
-    lines.push('## Per-(model, fixture) transcripts');
+    lines.push('## Per-(model, fixture, path) transcripts');
     lines.push('');
     for (const r of rows) {
-      lines.push(`### \`${r.modelId}\` / \`${r.fixtureId}\``);
+      lines.push(`### \`${r.modelId}\` / \`${r.fixtureId}\` / ${r.path}`);
       lines.push('');
       if (r.error) lines.push(`**Error:** ${r.error}`);
       else lines.push(`**Transcript:** ${r.transcript.slice(0, 400)}`);
