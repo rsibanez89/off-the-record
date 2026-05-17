@@ -1,8 +1,9 @@
 /// <reference lib="webworker" />
-import { db, type TranscriptToken } from '../lib/db';
+import { type TranscriptToken } from '../lib/db';
 import { TARGET_SAMPLE_RATE, DEFAULT_MODEL, isMultilingual, type ModelId } from '../lib/audio';
 import { type Backend } from '../lib/transcription/whisperAdapter';
 import { WhisperEngine } from '../lib/transcription/whisperEngine';
+import { DexieAudioArchiveRepository } from '../lib/repositories/dexieRepositories';
 
 // One-shot batch transcription worker. Loads its own Whisper pipeline,
 // independent of the live consumer. On `transcribe` it reads the full
@@ -31,6 +32,7 @@ declare const self: DedicatedWorkerGlobalScope;
 
 let engine: WhisperEngine | null = null;
 let modelId: ModelId = DEFAULT_MODEL;
+const audioArchive = new DexieAudioArchiveRepository();
 
 function postOut(msg: OutMessage) {
   self.postMessage(msg);
@@ -49,19 +51,6 @@ async function init(id: ModelId) {
   postOut({ type: 'ready', backend: engine.getBackend() });
 }
 
-async function loadFullAudio(): Promise<Float32Array | null> {
-  const chunks = await db.audioArchive.orderBy('startedAt').toArray();
-  if (chunks.length === 0) return null;
-  const total = chunks.reduce((s, c) => s + c.samples.length, 0);
-  const out = new Float32Array(total);
-  let offset = 0;
-  for (const c of chunks) {
-    out.set(c.samples, offset);
-    offset += c.samples.length;
-  }
-  return out;
-}
-
 async function transcribe(sessionId: number) {
   if (!engine) {
     postOut({ type: 'error', message: 'batch pipeline not initialised yet' });
@@ -69,7 +58,7 @@ async function transcribe(sessionId: number) {
   }
 
   postOut({ type: 'transcribe-start', sessionId });
-  const samples = await loadFullAudio();
+  const samples = await audioArchive.toFloat32();
   if (!samples) {
     postOut({
       type: 'transcribe-done',

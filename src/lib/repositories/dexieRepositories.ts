@@ -1,10 +1,13 @@
 // Dexie-backed implementations of the repository interfaces consumed by
-// `LiveTranscriptionLoop`. The worker uses these; integration tests inject
-// in-memory implementations instead.
+// `LiveTranscriptionLoop`, the producer worker, and the batch worker.
+// Workers use these; integration tests inject in-memory implementations
+// for the loop, and the producer's and batch's Dexie paths run in browser
+// only.
 //
 // Kept thin on purpose: the Dexie schema and table choice (chunks vs
 // audioArchive vs transcript) is defined in `src/lib/db.ts`; we just wrap
-// the live tables behind the interfaces the loop needs.
+// the live tables behind the interfaces consumers need. SOLID DIP:
+// producer/batch workers depend on the interface, not on Dexie.
 
 import { db, type TranscriptToken } from '../db';
 import { TARGET_SAMPLE_RATE } from '../audio';
@@ -13,6 +16,30 @@ import type {
   CollectedAudio,
   TranscriptRepository,
 } from '../transcription/liveLoop';
+
+/**
+ * Atomic publisher used by the producer worker. Writes each 1-second
+ * chunk to both `db.chunks` (live, evictable by the consumer's anchor)
+ * and `db.audioArchive` (kept for the batch worker) in one transaction.
+ * Keeping the two writes atomic prevents an orphan chunk in one table.
+ */
+export interface ChunkPublisher {
+  publish(chunk: {
+    startedAt: number;
+    samples: Float32Array;
+    speechProbability: number | undefined;
+  }): Promise<void>;
+}
+
+/**
+ * Reader used by the batch worker. Returns the concatenated `audioArchive`
+ * samples in one Float32Array (or null if empty), and exposes `clear` so
+ * the worker can drop the archive at session boundaries.
+ */
+export interface AudioArchiveRepository {
+  toFloat32(): Promise<Float32Array | null>;
+  clear(): Promise<void>;
+}
 
 export class DexieAudioChunkRepository implements AudioChunkRepository {
   async collectFrom(startS: number): Promise<CollectedAudio | null> {
@@ -55,6 +82,38 @@ export class DexieAudioChunkRepository implements AudioChunkRepository {
 
   async clear(): Promise<void> {
     await db.chunks.clear();
+  }
+}
+
+export class DexieChunkPublisher implements ChunkPublisher {
+  async publish(chunk: {
+    startedAt: number;
+    samples: Float32Array;
+    speechProbability: number | undefined;
+  }): Promise<void> {
+    await db.transaction('rw', db.chunks, db.audioArchive, async () => {
+      await db.chunks.add(chunk);
+      await db.audioArchive.add(chunk);
+    });
+  }
+}
+
+export class DexieAudioArchiveRepository implements AudioArchiveRepository {
+  async toFloat32(): Promise<Float32Array | null> {
+    const chunks = await db.audioArchive.orderBy('startedAt').toArray();
+    if (chunks.length === 0) return null;
+    const total = chunks.reduce((s, c) => s + c.samples.length, 0);
+    const out = new Float32Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      out.set(c.samples, offset);
+      offset += c.samples.length;
+    }
+    return out;
+  }
+
+  async clear(): Promise<void> {
+    await db.audioArchive.clear();
   }
 }
 

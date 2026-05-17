@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
-import { db } from '../lib/db';
 import { CHUNK_SAMPLES, TARGET_SAMPLE_RATE } from '../lib/audio';
+import { DexieChunkPublisher } from '../lib/repositories/dexieRepositories';
 import {
   Framer,
   LinearResampler,
@@ -28,6 +28,7 @@ type OutMessage =
     };
 
 const wakeup = new BroadcastChannel('new-chunk');
+const publisher = new DexieChunkPublisher();
 
 let sourceRate = 0;
 let resampler: LinearResampler | null = null;
@@ -122,13 +123,10 @@ async function flushChunkIfReady() {
     // Reset per-chunk max for the next 1-second window.
     vadMaxProbForChunk = undefined;
     try {
-      // Write to both tables in one transaction. The live consumer evicts
-      // chunks past its committed-audio anchor; audioArchive keeps the full
-      // recording for the batch worker to read on Stop.
-      await db.transaction('rw', db.chunks, db.audioArchive, async () => {
-        await db.chunks.add({ startedAt, samples: slice, speechProbability });
-        await db.audioArchive.add({ startedAt, samples: slice, speechProbability });
-      });
+      // Atomic dual-table publish: chunks (evictable by the consumer
+      // anchor) and audioArchive (kept for the batch worker) in one
+      // transaction. Atomicity prevents an orphan chunk in one table.
+      await publisher.publish({ startedAt, samples: slice, speechProbability });
       wakeup.postMessage({ type: 'new-chunk' });
       totalChunksWritten++;
       lastChunkAt = performance.now();
