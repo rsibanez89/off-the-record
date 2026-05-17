@@ -15,8 +15,8 @@
       "werOfflineVsGt": 0.15625,
       "streamingPenaltyPp": 12.5,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 5015.040286999996,
-      "realtimeFactor": 4.98500481936408,
+      "totalInferenceMs": 5165.432584000001,
+      "realtimeFactor": 4.839865702136516,
       "latencyDriftQ4Q1": null
     },
     "jfk-inaugural": {
@@ -27,14 +27,14 @@
       "inferenceTicks": 712,
       "forceSlideTicks": 7,
       "hallucinationDeferTicks": 1,
-      "werVsGt": 0.2805860805860806,
-      "cerVsGt": 0.22213170400543109,
+      "werVsGt": 0.2754578754578755,
+      "cerVsGt": 0.2195519348268839,
       "werOfflineVsGt": 0.5838827838827839,
-      "streamingPenaltyPp": -30.329670329670332,
+      "streamingPenaltyPp": -30.842490842490843,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 148148.68433699993,
-      "realtimeFactor": 4.859982410388379,
-      "latencyDriftQ4Q1": 0.9958945184217451
+      "totalInferenceMs": 147621.09044600016,
+      "realtimeFactor": 4.877351859579822,
+      "latencyDriftQ4Q1": 0.9993713478860431
     },
     "jfk": {
       "fixtureId": "jfk",
@@ -49,8 +49,8 @@
       "werOfflineVsGt": 0.045454545454545456,
       "streamingPenaltyPp": 0,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 2503.2207909999997,
-      "realtimeFactor": 4.394338701383853,
+      "totalInferenceMs": 2481.316458999999,
+      "realtimeFactor": 4.433130631162272,
       "latencyDriftQ4Q1": null
     },
     "long": {
@@ -66,8 +66,8 @@
       "werOfflineVsGt": 0.47470817120622566,
       "streamingPenaltyPp": -22.308690012970168,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 61135.06408700006,
-      "realtimeFactor": 5.479670382340131,
+      "totalInferenceMs": 60304.071577000075,
+      "realtimeFactor": 5.555180458623771,
       "latencyDriftQ4Q1": null
     },
     "synth": {
@@ -83,8 +83,8 @@
       "werOfflineVsGt": 0,
       "streamingPenaltyPp": 0,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 1329.7033349999997,
-      "realtimeFactor": 3.760237241188841,
+      "totalInferenceMs": 1298.6544999999996,
+      "realtimeFactor": 3.8501387397494877,
       "latencyDriftQ4Q1": null
     }
   }

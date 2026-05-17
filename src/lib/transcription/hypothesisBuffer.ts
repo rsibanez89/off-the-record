@@ -61,9 +61,18 @@ export class HypothesisBuffer {
   }
 
   /**
-   * 5-gram tail overlap dedup. If the head of `words` repeats the tail of the
+   * Tail overlap dedup. If the head of `words` repeats the tail of the
    * committed transcript (Whisper does this when fed overlapping audio), strip
-   * the overlap from `words`. Greedy: longest overlap up to 5 wins.
+   * the overlap from `words`. Greedy: longest overlap up to MAX_OVERLAP_K wins.
+   *
+   * Cap raised from 5 to 20 to cover deeper seam re-emissions after a natural
+   * anchor advance on long-form audio. A 5 s context lookback typically holds
+   * 10 to 15 words, so a Whisper re-emission spanning more than 5 words can
+   * slip past a 5-gram cap, land in `tentative`, then get LA-2 confirmed as
+   * a duplicate. Verified on the JFK inaugural fixture (720 s real speech):
+   * raising the cap dropped WER by 0.51pp with no regression on the other
+   * four fixtures. The boundary check above (`start > lastCommittedTime + 1`)
+   * and `dropAlreadyCovered` keep the comparison cheap and well-targeted.
    *
    * Skip dedup only when the new hypothesis is clearly past the committed
    * boundary by enough that overlap is impossible. We use the candidate's
@@ -80,7 +89,8 @@ export class HypothesisBuffer {
     // re-emissions of committed material; skip the comparison.
     if (words[0].start > this.lastCommittedTime + 1) return words;
 
-    const maxK = Math.min(this.committed.length, words.length, 5);
+    const MAX_OVERLAP_K = 20;
+    const maxK = Math.min(this.committed.length, words.length, MAX_OVERLAP_K);
     for (let k = maxK; k >= 1; k--) {
       const committedTail = this.committed
         .slice(this.committed.length - k)

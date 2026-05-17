@@ -10,17 +10,17 @@ Run `npm run bench` to refresh the candidate snapshot, `npm run bench:compare` t
 
 | Fixture | Duration | Ticks | WER vs gt | CER vs gt | WER offline | Streaming penalty | Hallucinations | Realtime ×
 |---|---|---|---|---|---|---|---|---|
-| jfk | 11 s | 11 | 4.55% | 1.92% | 4.55% | 0.00pp | 0 | 4.39× |
-| synth | 5 s | 5 | 0.00% | 0.00% | 0.00% | 0.00pp | 0 | 3.76× |
-| apollo11 | 25 s | 25 | 28.13% | 23.45% | 15.63% | 12.50pp | 0 | 4.99× |
-| long | 335 s | 335 | 25.16% | 19.71% | 47.47% | -22.31pp | 0 | 5.48× |
-| jfk-inaugural | 720 s | 720 | 28.06% | 22.21% | 58.39% | -30.33pp | 0 | 4.86× |
+| jfk | 11 s | 11 | 4.55% | 1.92% | 4.55% | 0.00pp | 0 | 4.43× |
+| synth | 5 s | 5 | 0.00% | 0.00% | 0.00% | 0.00pp | 0 | 3.85× |
+| apollo11 | 25 s | 25 | 28.13% | 23.45% | 15.63% | 12.50pp | 0 | 4.84× |
+| long | 335 s | 335 | 25.16% | 19.71% | 47.47% | -22.31pp | 0 | 5.56× |
+| jfk-inaugural | 720 s | 720 | 27.55% | 21.96% | 58.39% | -30.84pp | 0 | 4.88× |
 
 ## Long-session stability (jfk-inaugural fixture)
 
 - Tick count: 720 (712 inference, 7 force-slide, 1 hallucination-defer)
 - Latency drift Q4/Q1: 1.00× (above 1.2× would suggest per-tick state growth or a memory leak)
-- Realtime factor: 4.86×
+- Realtime factor: 4.88×
 
 ## Decision rule
 
