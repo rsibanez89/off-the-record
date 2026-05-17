@@ -132,6 +132,24 @@ export class DexieTranscriptRepository implements TranscriptRepository {
     });
   }
 
+  async writeIncremental(diff: TranscriptToken[], totalCount: number): Promise<void> {
+    // bulkPut overwrites by `tokenId`, so rows in `diff` land exactly at
+    // their target slots without touching the stable prefix. Trim anything
+    // beyond `totalCount` so a shrinking tentative does not leave a stale
+    // tail. Single transaction prevents UI live-queries from observing a
+    // half-applied state.
+    await db.transaction('rw', db.transcript, async () => {
+      if (totalCount === 0) {
+        await db.transcript.clear();
+        return;
+      }
+      if (diff.length > 0) {
+        await db.transcript.bulkPut(diff);
+      }
+      await db.transcript.where('tokenId').aboveOrEqual(totalCount).delete();
+    });
+  }
+
   async clear(): Promise<void> {
     await db.transcript.clear();
   }

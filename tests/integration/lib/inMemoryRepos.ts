@@ -63,10 +63,20 @@ export class InMemoryAudioChunkRepository implements AudioChunkRepository {
 export class InMemoryTranscriptRepository implements TranscriptRepository {
   rows: TranscriptToken[] = [];
   writeCount = 0;
+  writeIncrementalCount = 0;
 
   async write(rows: TranscriptToken[]): Promise<void> {
     this.writeCount++;
     this.rows = [...rows];
+  }
+
+  async writeIncremental(diff: TranscriptToken[], totalCount: number): Promise<void> {
+    this.writeIncrementalCount++;
+    // Apply diff in place by tokenId, then trim to totalCount.
+    for (const row of diff) {
+      this.rows[row.tokenId] = row;
+    }
+    if (this.rows.length > totalCount) this.rows.length = totalCount;
   }
 
   async clear(): Promise<void> {

@@ -46,7 +46,19 @@ export interface AudioChunkRepository {
 }
 
 export interface TranscriptRepository {
+  /** Full rewrite: replace stored rows with `rows`. Used at session reset. */
   write(rows: TranscriptToken[]): Promise<void>;
+  /**
+   * Incremental update: bulkPut `diff` (rows whose `tokenId` already
+   * indicates the target slot) and trim anything at or beyond `totalCount`.
+   * Used per inference tick so the repo does not rewrite 5,000+
+   * already-stable committed rows on every tick of a long session.
+   * Implementations must remain compatible with `write` semantics: after
+   * `writeIncremental(diff, totalCount)` the underlying store contains
+   * exactly the rows whose `tokenId < totalCount`, with `diff` taking
+   * precedence at its positions.
+   */
+  writeIncremental(diff: TranscriptToken[], totalCount: number): Promise<void>;
   clear(): Promise<void>;
 }
 
@@ -87,6 +99,12 @@ export interface LiveLoopDeps {
 export class LiveTranscriptionLoop {
   private committedAudioStartS = 0;
   private readonly anchorPolicy: AnchorPolicy;
+  // Diff-only writeTranscript state (3.5): rows at indices [0, prevCommittedCount)
+  // are already stored and stable across ticks (LA-2 invariant: committed rows
+  // never revert). Each tick only emits rows from prevCommittedCount onward
+  // (the newly-promoted committed words plus the entire current tentative
+  // tail), and `writeIncremental` trims anything past the new totalCount.
+  private prevCommittedCount = 0;
 
   constructor(private readonly deps: LiveLoopDeps) {
     this.anchorPolicy = deps.anchorPolicy ?? new SentenceBoundaryAnchorPolicy();
@@ -107,6 +125,7 @@ export class LiveTranscriptionLoop {
   /** Reset in-memory state (anchor + buffer). Does NOT clear repositories. */
   reset(): void {
     this.committedAudioStartS = 0;
+    this.prevCommittedCount = 0;
     this.deps.buffer.reset();
   }
 
@@ -242,14 +261,25 @@ export class LiveTranscriptionLoop {
   }
 
   private async writeTranscript(): Promise<TranscriptToken[]> {
+    const committed = this.deps.buffer.getCommitted();
+    const tentative = this.deps.buffer.getTentative();
     const rows: TranscriptToken[] = [];
-    for (const w of this.deps.buffer.getCommitted()) {
+    for (const w of committed) {
       rows.push({ tokenId: rows.length, text: w.text, t: w.start, isFinal: 1 });
     }
-    for (const w of this.deps.buffer.getTentative()) {
+    for (const w of tentative) {
       rows.push({ tokenId: rows.length, text: w.text, t: w.start, isFinal: 0 });
     }
-    await this.deps.transcriptRepo.write(rows);
+
+    // Diff write: rows at [0, prevCommittedCount) are stable LA-2 commits
+    // already stored. Each tick only ships:
+    //   - newly-committed rows: [prevCommittedCount, committed.length)
+    //   - the entire current tentative tail (it changes every tick)
+    //   - a trim to rows.length so any older tentative beyond the boundary
+    //     is removed.
+    const diff = rows.slice(this.prevCommittedCount);
+    await this.deps.transcriptRepo.writeIncremental(diff, rows.length);
+    this.prevCommittedCount = committed.length;
     return rows;
   }
 

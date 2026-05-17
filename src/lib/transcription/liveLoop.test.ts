@@ -58,9 +58,17 @@ class FakeAudioRepo implements AudioChunkRepository {
 class FakeTranscriptRepo implements TranscriptRepository {
   rows: TranscriptToken[] = [];
   writes = 0;
+  incrementalWrites = 0;
   async write(rows: TranscriptToken[]): Promise<void> {
     this.writes++;
     this.rows = [...rows];
+  }
+  async writeIncremental(diff: TranscriptToken[], totalCount: number): Promise<void> {
+    this.incrementalWrites++;
+    for (const row of diff) {
+      this.rows[row.tokenId] = row;
+    }
+    if (this.rows.length > totalCount) this.rows.length = totalCount;
   }
   async clear(): Promise<void> {
     this.rows = [];
