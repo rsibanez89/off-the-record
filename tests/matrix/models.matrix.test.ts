@@ -1,17 +1,21 @@
-// Model verification matrix. Runs every model in `MODELS` against the
-// `synth` fixture (5 s clean English TTS) via the production
-// `runWhisper` adapter, and prints a per-model report covering WER vs
-// ground truth, raw transcript, and inference time. This is used when
-// importing a new model to confirm it actually transcribes audio
-// before exposing it in the picker; it is NOT in the autonomous loop's
-// regression bench because adding models should not gate the loop and
-// pulling 4 model weights every loop iteration is wasteful.
+// Model verification matrix. Runs every model in `MODELS` across a small
+// set of audio fixtures (clean short TTS, real short speech, real medium
+// speech with background noise) via the production `runWhisper` adapter,
+// and writes a per-(model, fixture) report covering WER vs ground truth,
+// raw transcript, and inference time. This is used when importing a new
+// model to confirm it actually transcribes audio across realistic
+// conditions before exposing it in the picker. It is NOT in the
+// autonomous loop's regression bench because adding models should not
+// gate the loop and pulling 4 model weights every loop iteration is
+// wasteful.
 //
-// Run with: `npm run bench:matrix`.
+// Run with: `npm run bench:matrix`. Output is written to
+// `tests/matrix/.output/report.{md,json}` because vitest's default
+// reporter swallows console.log on passing tests.
 //
-// Failure semantics: each model gets a soft assertion that it produced a
-// non-empty transcript. Hard quality assertions live in the integration
-// suite (tiny.en only); this file is a diagnostic, not a regression gate.
+// Failure semantics: each (model, fixture) pair gets a soft assertion
+// that it produced a non-empty transcript. Hard quality assertions live
+// in the integration suite (tiny.en only); this file is a diagnostic.
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
@@ -24,9 +28,23 @@ import { wer, normalizeForScoring } from '../integration/lib/metrics';
 
 const FIXTURE_DIR = join(__dirname, '..', 'fixtures');
 
+// Three fixtures span the regimes the user actually hits: short clean
+// TTS, short real speech, medium real-plus-noise. The 335 s `long` and
+// 720 s `jfk-inaugural` fixtures are intentionally excluded; per-model
+// cold inference on those is minutes per model on Node CPU and offers
+// little extra signal beyond apollo11 for "does the model handle
+// realistic audio at all".
+const FIXTURES: Array<{ id: string; wav: string; json: string }> = [
+  { id: 'synth', wav: 'synth.16k.wav', json: 'synth.json' },
+  { id: 'jfk', wav: 'jfk.16k.wav', json: 'jfk.json' },
+  { id: 'apollo11', wav: 'apollo11-liftoff.wav', json: 'apollo11-liftoff.json' },
+];
+
 interface MatrixRow {
   modelId: ModelId;
-  durationMs: number;
+  fixtureId: string;
+  durationS: number;
+  inferenceMs: number;
   wordCount: number;
   werRate: number;
   transcript: string;
@@ -35,77 +53,82 @@ interface MatrixRow {
 
 const rows: MatrixRow[] = [];
 
-describe('Model matrix vs synth fixture (5 s, clean English TTS)', () => {
-  let fixture: ReturnType<typeof loadWav16kMono>;
-  let groundtruth: ReturnType<typeof loadGroundtruth>;
+describe('Model matrix vs multiple fixtures', () => {
+  const fixtures: Record<
+    string,
+    { audio: ReturnType<typeof loadWav16kMono>; groundtruth: ReturnType<typeof loadGroundtruth> }
+  > = {};
 
   beforeAll(() => {
-    fixture = loadWav16kMono(join(FIXTURE_DIR, 'synth.16k.wav'), 'synth');
-    groundtruth = loadGroundtruth(join(FIXTURE_DIR, 'synth.json'));
+    for (const f of FIXTURES) {
+      fixtures[f.id] = {
+        audio: loadWav16kMono(join(FIXTURE_DIR, f.wav), f.id),
+        groundtruth: loadGroundtruth(join(FIXTURE_DIR, f.json)),
+      };
+    }
   });
 
   for (const m of MODELS) {
-    it(`${m.id} transcribes synth`, async () => {
-      const t0 = performance.now();
-      try {
-        const pipeline = await createNodeWhisperPipeline(m.id);
-        const result = await runWhisper(pipeline, fixture.samples, {
-          language: isMultilingual(m.id) ? 'en' : undefined,
-          offsetSeconds: 0,
-          requestWordTimestamps: supportsWordTimestamps(m.id),
-        });
-        const durationMs = performance.now() - t0;
-        const transcript = result.words
-          .map((w) => w.text)
-          .join(' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        const werResult = wer(groundtruth.transcript, transcript);
-        rows.push({
-          modelId: m.id,
-          durationMs,
-          wordCount: result.words.length,
-          werRate: werResult.rate,
-          transcript,
-        });
-        /* eslint-disable no-console */
-        console.log(`\n  ===== ${m.id} =====`);
-        console.log(`  ground truth : ${normalizeForScoring(groundtruth.transcript)}`);
-        console.log(`  transcript   : ${normalizeForScoring(transcript)}`);
-        console.log(`  WER          : ${(werResult.rate * 100).toFixed(2)}%  (${werResult.edits}/${werResult.referenceLength})`);
-        console.log(`  words        : ${result.words.length}`);
-        console.log(`  inference    : ${durationMs.toFixed(0)} ms`);
-        /* eslint-enable no-console */
-        // Soft sanity: produced SOMETHING. A model that returns zero words
-        // on clean English TTS is broken. Quality thresholds live in the
-        // integration suite, not here.
-        expect(transcript.length).toBeGreaterThan(0);
-      } catch (err) {
-        rows.push({
-          modelId: m.id,
-          durationMs: performance.now() - t0,
-          wordCount: 0,
-          werRate: 1,
-          transcript: '',
-          error: (err as Error).message,
-        });
-        throw err;
-      }
-    }, 300_000);
+    for (const f of FIXTURES) {
+      it(`${m.id} on ${f.id}`, async () => {
+        const t0 = performance.now();
+        try {
+          const pipeline = await createNodeWhisperPipeline(m.id);
+          const { audio, groundtruth } = fixtures[f.id];
+          const result = await runWhisper(pipeline, audio.samples, {
+            language: isMultilingual(m.id) ? 'en' : undefined,
+            offsetSeconds: 0,
+            requestWordTimestamps: supportsWordTimestamps(m.id),
+          });
+          const inferenceMs = performance.now() - t0;
+          const transcript = result.words
+            .map((w) => w.text)
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const werResult = wer(groundtruth.transcript, transcript);
+          rows.push({
+            modelId: m.id,
+            fixtureId: f.id,
+            durationS: audio.durationS,
+            inferenceMs,
+            wordCount: result.words.length,
+            werRate: werResult.rate,
+            transcript,
+          });
+          /* eslint-disable no-console */
+          console.log(`\n  ===== ${m.id} / ${f.id} (${audio.durationS.toFixed(1)} s) =====`);
+          console.log(`  WER       : ${(werResult.rate * 100).toFixed(2)}%`);
+          console.log(`  words     : ${result.words.length}`);
+          console.log(`  inference : ${inferenceMs.toFixed(0)} ms`);
+          console.log(`  transcript: ${normalizeForScoring(transcript).slice(0, 200)}`);
+          /* eslint-enable no-console */
+          expect(transcript.length).toBeGreaterThan(0);
+        } catch (err) {
+          rows.push({
+            modelId: m.id,
+            fixtureId: f.id,
+            durationS: fixtures[f.id]?.audio.durationS ?? 0,
+            inferenceMs: performance.now() - t0,
+            wordCount: 0,
+            werRate: 1,
+            transcript: '',
+            error: (err as Error).message,
+          });
+          throw err;
+        }
+      }, 600_000);
+    }
   }
 
   it('writes aggregated matrix report', () => {
-    // Vitest's default reporter swallows console.log on passing tests, so
-    // we persist the matrix report to disk where the user (and a future
-    // diff) can read it. The file is `.gitignore`d by the bench's parent
-    // `.bench/` convention; we put it alongside the matrix test.
     const outDir = join(__dirname, '.output');
     mkdirSync(outDir, { recursive: true });
     const lines: string[] = [];
-    lines.push('# Model matrix vs synth fixture (5 s, clean English TTS)');
+    lines.push('# Model matrix');
     lines.push('');
-    lines.push('| Model | WER | Words | Inference (ms) | Status |');
-    lines.push('|---|---|---|---|---|');
+    lines.push('| Model | Fixture | Duration (s) | WER | Words | Inference (ms) | Status |');
+    lines.push('|---|---|---|---|---|---|---|');
     for (const r of rows) {
       const status = r.error
         ? `❌ ${r.error.slice(0, 80)}`
@@ -115,17 +138,17 @@ describe('Model matrix vs synth fixture (5 s, clean English TTS)', () => {
             ? '⚠️ borderline'
             : '❌ garbage';
       lines.push(
-        `| \`${r.modelId}\` | ${(r.werRate * 100).toFixed(1)}% | ${r.wordCount} | ${r.durationMs.toFixed(0)} | ${status} |`,
+        `| \`${r.modelId}\` | ${r.fixtureId} | ${r.durationS.toFixed(1)} | ${(r.werRate * 100).toFixed(1)}% | ${r.wordCount} | ${r.inferenceMs.toFixed(0)} | ${status} |`,
       );
     }
     lines.push('');
-    lines.push('## Per-model transcripts');
+    lines.push('## Per-(model, fixture) transcripts');
     lines.push('');
     for (const r of rows) {
-      lines.push(`### \`${r.modelId}\``);
+      lines.push(`### \`${r.modelId}\` / \`${r.fixtureId}\``);
       lines.push('');
       if (r.error) lines.push(`**Error:** ${r.error}`);
-      else lines.push(`**Transcript:** ${r.transcript}`);
+      else lines.push(`**Transcript:** ${r.transcript.slice(0, 400)}`);
       lines.push('');
     }
     writeFileSync(join(outDir, 'report.md'), lines.join('\n'));
