@@ -12,14 +12,15 @@
 import { isMultilingual, TARGET_SAMPLE_RATE, type ModelId } from '../audio';
 import type { TranscriptToken } from '../db';
 import { HypothesisBuffer, type TimedWord } from './hypothesisBuffer';
-import { isHallucinationLine, isSentenceEnd, isSilent, rms } from './heuristics';
+import { isHallucinationLine, isSilent, rms } from './heuristics';
 import { runWhisper, type WhisperPipeline } from './whisperAdapter';
 import {
-  CONTEXT_LOOKBACK_S,
+  AnchorPolicy,
+  SentenceBoundaryAnchorPolicy,
+} from './anchorPolicy';
+import {
   DRAIN_MAX_ITERATIONS,
-  FAST_TRIM_THRESHOLD_S,
   MAX_PROMPT_CHARS,
-  MAX_WINDOW_S,
   MIN_DRAIN_WINDOW_S,
   MIN_WINDOW_S,
   VAD_SILENCE_THRESHOLD,
@@ -74,12 +75,22 @@ export interface LiveLoopDeps {
   audioRepo: AudioChunkRepository;
   transcriptRepo: TranscriptRepository;
   modelId: ModelId;
+  /**
+   * Optional anchor advancement policy. Defaults to the conservative
+   * sentence-boundary policy that matches the original inline behaviour.
+   * Injectable so tests and future variants (e.g. AlignAtt) can swap it
+   * without touching the loop.
+   */
+  anchorPolicy?: AnchorPolicy;
 }
 
 export class LiveTranscriptionLoop {
   private committedAudioStartS = 0;
+  private readonly anchorPolicy: AnchorPolicy;
 
-  constructor(private readonly deps: LiveLoopDeps) {}
+  constructor(private readonly deps: LiveLoopDeps) {
+    this.anchorPolicy = deps.anchorPolicy ?? new SentenceBoundaryAnchorPolicy();
+  }
 
   getCommittedAudioStartS(): number {
     return this.committedAudioStartS;
@@ -176,25 +187,29 @@ export class LiveTranscriptionLoop {
         `committed=${buffer.getCommitted().length} tentative=${buffer.getTentative().length}`,
     );
 
-    // Anchor advancement (conservative).
-    const sentenceEnd = findLatestSentenceEnd(buffer.getCommitted());
-    if (sentenceEnd > 0) {
-      const target = sentenceEnd - CONTEXT_LOOKBACK_S;
-      if (target > this.committedAudioStartS) await this.advanceAnchor(target);
-    } else if (dur > FAST_TRIM_THRESHOLD_S) {
-      const target = buffer.getLastCommittedTime() - CONTEXT_LOOKBACK_S;
-      if (target > this.committedAudioStartS) await this.advanceAnchor(target);
-    }
+    const decision = this.anchorPolicy.decide({
+      committed: buffer.getCommitted(),
+      tentative: buffer.getTentative(),
+      windowDurationS: dur,
+      windowEndS: audio.t1,
+      currentAnchorS: this.committedAudioStartS,
+      lastCommittedEndS: buffer.getLastCommittedTime(),
+    });
 
-    // Force-slide safety net.
-    if (dur > MAX_WINDOW_S) {
+    if (decision.forceCommit) {
       const forced = buffer.forceCommit();
       const finalRows = await this.writeTranscript();
-      await this.advanceAnchor(audio.t1 - CONTEXT_LOOKBACK_S);
+      if (decision.newAnchorS != null) {
+        await this.advanceAnchor(decision.newAnchorS);
+      }
       console.log(
         `[live-loop] force-slide dur=${dur.toFixed(2)}s force-committed=${forced.length}`,
       );
       return { kind: 'force-slide', windowDurationS: dur, rowsChanged: true, rows: finalRows };
+    }
+
+    if (decision.newAnchorS != null) {
+      await this.advanceAnchor(decision.newAnchorS);
     }
 
     return { kind: 'inference', windowDurationS: dur, rowsChanged: true, rows };
@@ -243,13 +258,6 @@ export class LiveTranscriptionLoop {
     this.committedAudioStartS = toS;
     await this.deps.audioRepo.deleteBefore(toS);
   }
-}
-
-function findLatestSentenceEnd(committed: readonly TimedWord[]): number {
-  for (let i = committed.length - 1; i >= 0; i--) {
-    if (isSentenceEnd(committed[i].text)) return committed[i].end;
-  }
-  return 0;
 }
 
 function buildInitialPrompt(committed: readonly TimedWord[]): string | undefined {
