@@ -28,27 +28,48 @@ type InMessage =
   | { type: 'reset' }
   | { type: 'flush' };
 
-type OutMessage =
+// Outbound message union, split by category. The runtime emits exactly the
+// same wire shapes as before; this split exists so the main thread can
+// dispatch by category and TypeScript can narrow on a missing variant.
+//
+// SOLID Single Responsibility: each subtype carries a single concern
+// (lifecycle, progress reporting, displayed transcript, internal stats).
+
+/** Session lifecycle events. The main thread drives state machines off these. */
+type ConsumerLifecycleMessage =
   | { type: 'ready'; backend: 'webgpu' | 'wasm' }
-  | { type: 'progress'; file: string; loaded: number; total: number; status: string }
-  | { type: 'error'; message: string }
-  | { type: 'display'; tokens: TranscriptToken[] }
   | { type: 'reset-done' }
-  | { type: 'flush-done' }
-  | {
-      type: 'stats';
-      tickCount: number;
-      lastTickMs: number;
-      lastTickAt: number;
-      lastTickKind: TickKind;
-      windowDurationS: number;
-      committedWordsCount: number;
-      prevHypothesisCount: number;
-      stableFullTicks: number;
-      committedAudioStartS: number;
-      processing: boolean;
-      draining: boolean;
-    };
+  | { type: 'flush-done' };
+
+/** Model loading progress and unrecoverable errors. */
+type ConsumerProgressMessage =
+  | { type: 'progress'; file: string; loaded: number; total: number; status: string }
+  | { type: 'error'; message: string };
+
+/** Per-tick transcript updates rendered into the UI. */
+type ConsumerDisplayMessage = { type: 'display'; tokens: TranscriptToken[] };
+
+/** Dev-panel statistics. Posted on every tick boundary. */
+type ConsumerStatsMessage = {
+  type: 'stats';
+  tickCount: number;
+  lastTickMs: number;
+  lastTickAt: number;
+  lastTickKind: TickKind;
+  windowDurationS: number;
+  committedWordsCount: number;
+  prevHypothesisCount: number;
+  stableFullTicks: number;
+  committedAudioStartS: number;
+  processing: boolean;
+  draining: boolean;
+};
+
+type OutMessage =
+  | ConsumerLifecycleMessage
+  | ConsumerProgressMessage
+  | ConsumerDisplayMessage
+  | ConsumerStatsMessage;
 
 declare const self: DedicatedWorkerGlobalScope;
 
