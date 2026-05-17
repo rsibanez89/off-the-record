@@ -30,9 +30,16 @@ Append-only. One block per attempt. See `docs/AUTONOMOUS-LOOP.md` for the protoc
 - WER deltas per fixture: apollo11 +0.00pp, jfk +0.00pp, jfk-inaugural +0.15pp, long +0.00pp, synth +0.00pp
 - Notes: Tried the opposite direction after the tight-jitter regression. JFK inaugural drifted +0.15pp (sub-threshold), `long` did not move. The 0.1 default is well-tuned; either direction degrades quality somewhere. Speculative tweak, no payoff -> reverted.
 
+## 2026-05-17T17:17Z | stripCommittedTailOverlap k-cap 20 -> 50
+
+- Verdict: neutral
+- Action: reverted
+- WER deltas per fixture: apollo11 +0.00pp, jfk +0.00pp, jfk-inaugural +0.00pp, long +0.00pp, synth +0.00pp
+- Notes: Hypothesis: maybe boundary overlaps even longer than 20 words exist on the long-form fixtures. Bench result: identical metrics across all five fixtures. k=20 already covered every overlap that matters here; the rest is bounded by `dropAlreadyCovered` + the boundary-start short-circuit. Confirms k=20 is the right setting; pushing higher is wasted comparisons.
+
 ## Session summary
 
-- Attempts: 4 (target was up to 5).
+- Attempts: 5 (the loop's hard cap).
 - Committed: 1 (5.13 k-cap 5 -> 20). Baseline JFK-inaugural WER dropped from 28.06% to 27.55%.
-- Reverted: 3 (5.14 drop-tentative, jitter 0.05, jitter 0.2).
-- Stopped because the small-scoped levers in the in-scope list either landed (k-cap) or did not move the bench (drop-tentative, jitter tuning), and the obvious remaining duplication on `long` likely needs an investigative pass on the actual streamed transcript rather than another blind parameter sweep.
+- Reverted: 4 (5.14 drop-tentative, jitter 0.05, jitter 0.2, k-cap 50).
+- Stopped because (a) hit the 5-attempt cap, (b) the last three iterations were all neutral/regression reverts (the protocol's other stop condition), and (c) the small-scoped levers in the in-scope list are exhausted at this baseline. The obvious remaining duplication on `long` likely needs an investigative pass on the actual streamed transcript rather than another blind parameter sweep.
