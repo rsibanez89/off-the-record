@@ -183,12 +183,29 @@ describe('parseResult (via runWhisper)', () => {
     expect(result.words).toEqual([]);
   });
 
-  it('returns empty words when chunks is missing or empty', async () => {
-    const { pipeline: p1 } = mockPipeline({ text: 'only text, no chunks' });
-    expect((await runWhisper(p1, audio, { offsetSeconds: 0 })).words).toEqual([]);
+  it('synthesises evenly-distributed words from text when chunks is missing', async () => {
+    // Moonshine via transformers.js returns `{ text }` with no `chunks`
+    // array. The fallback path tokenises on whitespace and distributes
+    // timestamps across the audio duration so the batch panel can still
+    // render a transcript. These synthesised entries are inaccurate
+    // enough that the model is filtered from the live picker via
+    // `supportsWordTimestamps: false`, but the batch path stays useful.
+    const { pipeline } = mockPipeline({ text: 'hello world from moonshine' });
+    const result = await runWhisper(pipeline, audio, { offsetSeconds: 0 });
+    expect(result.text).toBe('hello world from moonshine');
+    expect(result.words.map((w) => w.text)).toEqual(['hello', 'world', 'from', 'moonshine']);
+    // Timestamps are monotonic and span the audio duration.
+    const audioDurationS = audio.length / 16_000;
+    expect(result.words[0].start).toBe(0);
+    expect(result.words[result.words.length - 1].end).toBeCloseTo(audioDurationS, 5);
+    for (let i = 1; i < result.words.length; i++) {
+      expect(result.words[i].start).toBeGreaterThanOrEqual(result.words[i - 1].end - 1e-9);
+    }
+  });
 
-    const { pipeline: p2 } = mockPipeline({ text: '', chunks: [] });
-    expect((await runWhisper(p2, audio, { offsetSeconds: 0 })).words).toEqual([]);
+  it('returns empty words when both chunks and text are empty', async () => {
+    const { pipeline } = mockPipeline({ text: '', chunks: [] });
+    expect((await runWhisper(pipeline, audio, { offsetSeconds: 0 })).words).toEqual([]);
   });
 
   it('drops chunks whose start OR end timestamp is null', async () => {

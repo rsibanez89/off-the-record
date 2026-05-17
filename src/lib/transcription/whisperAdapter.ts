@@ -159,7 +159,8 @@ export async function runWhisper(
     }
   }
   const raw = await pipeline(samples, callOpts);
-  const parsed = parseResult(raw, opts.offsetSeconds);
+  const audioDurationS = samples.length / 16_000;
+  const parsed = parseResult(raw, opts.offsetSeconds, audioDurationS);
   if (opts.initialPrompt) {
     // Whisper sometimes regurgitates the entire prompt verbatim at the head
     // of its output instead of using it purely as conditioning context. The
@@ -218,26 +219,54 @@ function encodePromptIds(tokenizer: WhisperTokenizer, prompt: string): number[] 
   return ids.slice(ids.length - MAX_PROMPT_TOKENS);
 }
 
-function parseResult(raw: unknown, offsetSeconds: number): WhisperRunResult {
+function parseResult(
+  raw: unknown,
+  offsetSeconds: number,
+  audioDurationS: number,
+): WhisperRunResult {
   const obj = Array.isArray(raw) ? raw[0] : raw;
   const r = (obj ?? {}) as { text?: string; chunks?: WhisperChunk[] };
   const text = r.text ?? '';
   const chunks = Array.isArray(r.chunks) ? r.chunks : [];
-  const words: TimedWord[] = [];
-  for (const chunk of chunks) {
-    const t = (chunk.text ?? '').trim();
-    if (!t) continue;
-    if (isHallucinationWord(t)) continue;
-    const [start, end] = chunk.timestamp ?? [null, null];
-    // Whisper sometimes returns nulls for word-level timestamps near the edge
-    // of the audio window. Drop those words: their position is unreliable, so
-    // LocalAgreement can't safely commit them.
-    if (start == null || end == null) continue;
-    words.push({
-      text: t,
-      start: start + offsetSeconds,
-      end: end + offsetSeconds,
-    });
+
+  if (chunks.length > 0) {
+    const words: TimedWord[] = [];
+    for (const chunk of chunks) {
+      const t = (chunk.text ?? '').trim();
+      if (!t) continue;
+      if (isHallucinationWord(t)) continue;
+      const [start, end] = chunk.timestamp ?? [null, null];
+      // Whisper sometimes returns nulls for word-level timestamps near the
+      // edge of the audio window. Drop those words: their position is
+      // unreliable, so LocalAgreement can't safely commit them.
+      if (start == null || end == null) continue;
+      words.push({
+        text: t,
+        start: start + offsetSeconds,
+        end: end + offsetSeconds,
+      });
+    }
+    return { text, words };
   }
-  return { text, words };
+
+  // Fallback path: some models (e.g. Moonshine via transformers.js) return
+  // text-only output with no `chunks` array. Synthesise per-word entries
+  // from whitespace tokenisation, distributing timestamps evenly across
+  // `audioDurationS` so downstream consumers (batch panel rendering, WER
+  // scoring) still have something to work with. These models are filtered
+  // out of the live picker (`supportsWordTimestamps: false`) because the
+  // synthesised timestamps are not accurate enough for LA-2 agreement,
+  // but the batch panel still displays a useful transcript.
+  const tokens = text
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0 && !isHallucinationWord(t));
+  if (tokens.length === 0) return { text, words: [] };
+  const slot = audioDurationS > 0 ? audioDurationS / tokens.length : 0;
+  const synthesised: TimedWord[] = tokens.map((t, i) => ({
+    text: t,
+    start: offsetSeconds + i * slot,
+    end: offsetSeconds + (i + 1) * slot,
+  }));
+  return { text, words: synthesised };
 }

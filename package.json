@@ -16,7 +16,8 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "bench": "rm -rf tests/integration/.bench && vitest run --config vitest.integration.config.ts && node scripts/bench-compare.mjs",
     "bench:compare": "node scripts/bench-compare.mjs",
-    "bench:promote": "node scripts/bench-promote.mjs"
+    "bench:promote": "node scripts/bench-promote.mjs",
+    "bench:matrix": "vitest run --config vitest.matrix.config.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.3.3",
