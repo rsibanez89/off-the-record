@@ -86,10 +86,27 @@ function secondOfSpeech(): Float32Array {
 }
 
 describe('NativeStreamingLoop', () => {
-  it('commits the pipeline output immediately and advances the anchor past the window', async () => {
+  it('returns short-window until enough audio is collected (NATIVE_STREAMING_WINDOW_S)', async () => {
     const audioRepo = new FakeAudioRepo();
     const transcriptRepo = new FakeTranscriptRepo();
     audioRepo.push({ startedAt: 0, samples: secondOfSpeech(), speechProbability: 0.9 });
+    const { pipeline } = scriptedPipeline([
+      { text: ' nope', chunks: [{ text: ' nope', timestamp: [0, 0.5] }] },
+    ]);
+    const loop = new NativeStreamingLoop({ pipeline, audioRepo, transcriptRepo, modelId: MOONSHINE });
+
+    const outcome = await loop.tick();
+    expect(outcome.kind).toBe('short-window');
+    expect(outcome.rowsChanged).toBe(false);
+    expect(loop.getCommittedAudioStartS()).toBe(0);
+  });
+
+  it('commits the pipeline output immediately and advances the anchor past the window', async () => {
+    const audioRepo = new FakeAudioRepo();
+    const transcriptRepo = new FakeTranscriptRepo();
+    // Two 1 s chunks to clear the 2 s native-streaming minimum.
+    audioRepo.push({ startedAt: 0, samples: secondOfSpeech(), speechProbability: 0.9 });
+    audioRepo.push({ startedAt: 1, samples: secondOfSpeech(), speechProbability: 0.9 });
     const { pipeline } = scriptedPipeline([
       {
         text: ' hello world',
@@ -108,8 +125,7 @@ describe('NativeStreamingLoop', () => {
     expect(outcome.rows.every((r) => r.isFinal === 1)).toBe(true);
     expect(loop.getCommittedWordCount()).toBe(2);
     expect(loop.getTentativeWordCount()).toBe(0);
-    expect(loop.getCommittedAudioStartS()).toBe(1.0);
-    // Anchor advanced past the chunk; deleteBefore evicted it.
+    expect(loop.getCommittedAudioStartS()).toBe(2.0);
     expect(audioRepo.chunks).toHaveLength(0);
   });
 
@@ -117,12 +133,13 @@ describe('NativeStreamingLoop', () => {
     const audioRepo = new FakeAudioRepo();
     const transcriptRepo = new FakeTranscriptRepo();
     audioRepo.push({ startedAt: 0, samples: SECOND_OF_SILENCE, speechProbability: 0.0 });
+    audioRepo.push({ startedAt: 1, samples: SECOND_OF_SILENCE, speechProbability: 0.0 });
     const { pipeline } = scriptedPipeline([]);
     const loop = new NativeStreamingLoop({ pipeline, audioRepo, transcriptRepo, modelId: MOONSHINE });
 
     const outcome = await loop.tick();
     expect(outcome.kind).toBe('silence');
-    expect(loop.getCommittedAudioStartS()).toBe(1.0);
+    expect(loop.getCommittedAudioStartS()).toBe(2.0);
     expect(transcriptRepo.rows).toEqual([]);
   });
 
@@ -137,13 +154,14 @@ describe('NativeStreamingLoop', () => {
     ]);
     const loop = new NativeStreamingLoop({ pipeline, audioRepo, transcriptRepo, modelId: MOONSHINE });
 
-    // First tick consumes both chunks because collectFrom concatenates
-    // everything past the anchor. The second tick finds nothing.
+    // First tick consumes both chunks (2 s window meets the minimum).
     await loop.tick();
     expect(loop.getCommittedWordCount()).toBe(1);
     expect(loop.getCommittedAudioStartS()).toBe(2.0);
 
+    // Need 2 more 1 s chunks to clear the minimum on the second window.
     audioRepo.push({ startedAt: 2, samples: secondOfSpeech(), speechProbability: 0.9 });
+    audioRepo.push({ startedAt: 3, samples: secondOfSpeech(), speechProbability: 0.9 });
     await loop.tick();
     expect(loop.getCommittedWordCount()).toBe(2);
     expect(transcriptRepo.rows.map((r) => r.text)).toEqual(['alpha', 'beta']);
@@ -153,6 +171,7 @@ describe('NativeStreamingLoop', () => {
     const audioRepo = new FakeAudioRepo();
     const transcriptRepo = new FakeTranscriptRepo();
     audioRepo.push({ startedAt: 0, samples: secondOfSpeech(), speechProbability: 0.9 });
+    audioRepo.push({ startedAt: 1, samples: secondOfSpeech(), speechProbability: 0.9 });
     const { pipeline } = scriptedPipeline([
       {
         text: ' Thanks for watching.',
@@ -164,12 +183,14 @@ describe('NativeStreamingLoop', () => {
     const outcome = await loop.tick();
     expect(outcome.kind).toBe('hallucination');
     expect(loop.getCommittedWordCount()).toBe(0);
-    expect(loop.getCommittedAudioStartS()).toBe(1.0);
+    expect(loop.getCommittedAudioStartS()).toBe(2.0);
   });
 
-  it('drainAndFinalise consumes remaining audio and clears the repo', async () => {
+  it('drainAndFinalise consumes remaining audio (including sub-min-window) and clears the repo', async () => {
     const audioRepo = new FakeAudioRepo();
     const transcriptRepo = new FakeTranscriptRepo();
+    // Only 1 s of audio: below the per-tick minimum, but the drain
+    // overrides minWindowS=0 so this still gets transcribed on Stop.
     audioRepo.push({ startedAt: 0, samples: secondOfSpeech(), speechProbability: 0.9 });
     const { pipeline } = scriptedPipeline([
       { text: ' done', chunks: [{ text: ' done', timestamp: [0, 0.5] }] },
@@ -186,6 +207,7 @@ describe('NativeStreamingLoop', () => {
     const audioRepo = new FakeAudioRepo();
     const transcriptRepo = new FakeTranscriptRepo();
     audioRepo.push({ startedAt: 0, samples: secondOfSpeech(), speechProbability: 0.9 });
+    audioRepo.push({ startedAt: 1, samples: secondOfSpeech(), speechProbability: 0.9 });
     const { pipeline } = scriptedPipeline([
       { text: ' x', chunks: [{ text: ' x', timestamp: [0, 0.2] }] },
     ]);

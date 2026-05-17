@@ -30,7 +30,7 @@ import type { TranscriptToken } from '../db';
 import type { TimedWord } from './hypothesisBuffer';
 import { isHallucinationLine, isSilent, rms } from './heuristics';
 import { runWhisper, type WhisperPipeline } from './whisperAdapter';
-import { VAD_SILENCE_THRESHOLD } from '../config';
+import { NATIVE_STREAMING_WINDOW_S, VAD_SILENCE_THRESHOLD } from '../config';
 import type {
   AudioChunkRepository,
   TickKind,
@@ -79,14 +79,26 @@ export class NativeStreamingLoop {
     this.committed = [];
   }
 
-  async tick(): Promise<TickOutcome> {
+  async tick(opts?: { minWindowS?: number }): Promise<TickOutcome> {
     const { audioRepo, pipeline, modelId } = this.deps;
+    const minWindowS = opts?.minWindowS ?? NATIVE_STREAMING_WINDOW_S;
 
     const audio = await audioRepo.collectFrom(this.committedAudioStartS);
     if (!audio) {
       return { kind: 'idle', windowDurationS: 0, rowsChanged: false, rows: [] };
     }
     const dur = audio.samples.length / TARGET_SAMPLE_RATE;
+
+    // Wait until we have at least `minWindowS` seconds of audio before
+    // invoking the model. Production cadence uses
+    // `NATIVE_STREAMING_WINDOW_S` (2 s) because small models like
+    // Moonshine 61M need enough acoustic context per call to maintain
+    // coherence; firing on every 1 s producer chunk produces fragmented
+    // hallucinated output. `drainAndFinalise` overrides to 0 so the
+    // trailing sub-window on Stop still gets transcribed.
+    if (dur < minWindowS) {
+      return { kind: 'short-window', windowDurationS: dur, rowsChanged: false, rows: [] };
+    }
 
     // Silence gate: same VAD-first, RMS-fallback policy as the LA-2 path.
     // On silence we still advance the anchor so the next tick sees fresh
@@ -162,10 +174,13 @@ export class NativeStreamingLoop {
   async drainAndFinalise(): Promise<TranscriptToken[]> {
     // Process any remaining audio with one final tick; native streaming
     // does not need the multi-iteration drain that LA-2 uses to confirm
-    // tentative words (there is no tentative state to confirm).
+    // tentative words (there is no tentative state to confirm). Override
+    // the min-window guard so the trailing sub-window (audio shorter
+    // than NATIVE_STREAMING_WINDOW_S) still gets transcribed.
     while (true) {
-      const outcome = await this.tick();
+      const outcome = await this.tick({ minWindowS: 0 });
       if (outcome.kind === 'idle' || outcome.kind === 'error') break;
+      if (outcome.kind === 'short-window') break;
     }
     const rows = this.committed.map<TranscriptToken>((w, i) => ({
       tokenId: i,

@@ -48,3 +48,14 @@ export const DRAIN_MAX_ITERATIONS = 20;
  * count).
  */
 export const MAX_PROMPT_CHARS = 800;
+
+/**
+ * Minimum window size for `NativeStreamingLoop` ticks. Native-streaming
+ * models (Moonshine) are designed for short windows but still need enough
+ * acoustic context to disambiguate mid-sentence audio. Empirically 1 s of
+ * mid-sentence speech produces fragmented hallucinated output ("Trying to
+ * walk" instead of "trying to identify"); 2 s gives the encoder enough
+ * context for coherent continuation. Bumping further trades latency for
+ * quality; if 2 s shows seam loss, try 2.5 s or 3 s next.
+ */
+export const NATIVE_STREAMING_WINDOW_S = 2.0;

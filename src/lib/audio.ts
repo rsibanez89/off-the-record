@@ -48,10 +48,10 @@ export const MODELS = [
   },
   {
     id: 'distil-whisper/distil-large-v3.5-ONNX',
-    liveLabel: 'distil-large-v3.5 (batch-only)',
+    liveLabel: 'distil-large-v3.5 (native streaming, ~500 MB, may lag on slow hardware)',
     batchLabel: 'distil-large-v3.5 (HF/distil, ~500 MB, beats turbo on OOD WER)',
     supportsWordTimestamps: false,
-    streamingPolicy: null as LiveStreamingPolicy,
+    streamingPolicy: 'native' as LiveStreamingPolicy,
   },
   {
     id: 'onnx-community/moonshine-base-ONNX',
