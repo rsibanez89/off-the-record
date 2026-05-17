@@ -51,11 +51,11 @@ Append-only. One block per attempt. See `docs/AUTONOMOUS-LOOP.md` for the protoc
 - Reverted: 1 (`dropAlreadyCovered` start-based filter, hard JFK regression).
 - Stopped voluntarily after the regression: the biggest tractable algorithm-side wins are now banked, Apollo 11's residual has no clean single-file remedy per the second sub-agent investigation, and continuing risks burning more wall-time on diminishing returns. The investigative-sub-agent recipe worked beautifully on `long` (5.15); applied again to Apollo 11 (next-iteration entry above), it honestly returned "no clean fix" plus a fix that bench-regressed, which is also a valuable signal.
 
-## Session summary (run 3, ended 19:20Z)
+## Session summary (run 3, ended 19:28Z)
 
 Goal: test every remaining item in `improvements.md`. Result:
 
-Shipped 6 bench-neutral structural improvements (all SOLID refactors, integration tests pass, bench neutral, kept by structural-improvement rule):
+Shipped 7 bench-neutral structural improvements (all SOLID refactors, integration tests pass, bench neutral, kept by structural-improvement rule):
 
 - 2.7 config centralisation (commit f038e4b)
 - 2.5 WhisperEngine class (commit 39aae82)
@@ -64,6 +64,7 @@ Shipped 6 bench-neutral structural improvements (all SOLID refactors, integratio
 - 2.8 audio-worklet sample-rate adaptivity (commit 9ee1981)
 - 3.5 writeTranscript diff-only (commit 04486c3)
 - 5.3 LocalAgreement-n configurability (commit 1066492; n=2 default kept, n=3 sweep regressed Apollo 11 streaming penalty so reverted to n=2)
+- 2.6 consumer OutMessage type split (commit 6deed0a; the App.tsx handler-extraction half stays open as a UI pass)
 
 Reverted 1: 5.14 v2 drain witness-only LA-2 mode (entry below).
 
