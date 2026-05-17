@@ -7,7 +7,7 @@
 // this class: it owns pipeline creation, message dispatch, timer pacing, and
 // the `BroadcastChannel` wake-up. Anything algorithmic lives here, so we can
 // drive it from Vitest with an in-memory pipeline and in-memory repositories
-// for integration tests (improvement 2.3 in `docs/improvements.md`).
+// for integration tests (improvement 2.3 in the workspace improvements backlog).
 
 import { isMultilingual, TARGET_SAMPLE_RATE, type ModelId } from '../audio';
 import type { TranscriptToken } from '../db';

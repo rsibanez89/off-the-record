@@ -13,7 +13,10 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "bench": "rm -rf tests/integration/.bench && vitest run --config vitest.integration.config.ts && node scripts/bench-compare.mjs",
+    "bench:compare": "node scripts/bench-compare.mjs",
+    "bench:promote": "node scripts/bench-promote.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.3.3",

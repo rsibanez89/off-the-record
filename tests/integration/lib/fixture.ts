@@ -19,12 +19,36 @@ export interface Groundtruth {
   sampleRateHz: number;
   channels: number;
   durationS: number;
+  /** Inline transcript, OR loaded from `transcriptPath` (resolved next to the JSON). */
   transcript: string;
   notes?: string;
 }
 
+interface GroundtruthRaw {
+  id: string;
+  source: string;
+  license: string;
+  sampleRateHz: number;
+  channels: number;
+  durationS: number;
+  transcript?: string;
+  transcriptPath?: string;
+  notes?: string;
+}
+
 export function loadGroundtruth(path: string): Groundtruth {
-  return JSON.parse(readFileSync(path, 'utf-8')) as Groundtruth;
+  const raw = JSON.parse(readFileSync(path, 'utf-8')) as GroundtruthRaw;
+  let transcript = raw.transcript;
+  if (transcript === undefined && raw.transcriptPath) {
+    // Resolve relative to the JSON file so test fixtures can keep long
+    // transcripts in a sibling .txt for diff-friendliness.
+    const dir = path.substring(0, path.lastIndexOf('/'));
+    transcript = readFileSync(`${dir}/${raw.transcriptPath}`, 'utf-8');
+  }
+  if (transcript === undefined) {
+    throw new Error(`groundtruth ${raw.id}: neither transcript nor transcriptPath provided`);
+  }
+  return { ...raw, transcript };
 }
 
 export function loadWav16kMono(path: string, id: string): AudioFixture {

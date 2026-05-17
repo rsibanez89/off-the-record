@@ -1,0 +1,10 @@
+{
+  "id": "apollo11-liftoff",
+  "source": "NASA Apollo 11 launch countdown (Public Affairs Officer Jack King narrating the final seconds of the Saturn V launch). Downloaded from https://www.nasa.gov/wp-content/uploads/2015/01/590320main_ringtone_apollo11_countdown.mp3, resampled from 44.1 kHz to 16 kHz mono pcm_s16le via ffmpeg, padded with trailing silence to a clean 25 s.",
+  "license": "Public domain. Works of the United States federal government are not subject to copyright in the US under 17 U.S.C. § 105. NASA media usage policy: https://www.nasa.gov/nasa-brand-center/images-and-media/ (\"NASA content is generally not subject to copyright in the United States\"). Sourced from NASA Historical Sounds: https://www.nasa.gov/historical-sounds/.",
+  "sampleRateHz": 16000,
+  "channels": 1,
+  "durationS": 25.0,
+  "transcript": "Ignition sequence start. 6, 5, 4, 3, 2, 1, 0. All engine running. Lift off. We have a lift off. 32 minutes past the hour. Lift off on Apollo 11. Tower cleared.",
+  "notes": "Narration over launch-control room audio and Saturn V rumble: tests the streaming pipeline against speech with background noise (the original brief that the A-Team clip was filling, now with a clean public-domain alternative). The audio is the NASA \"ringtone\" excerpt, which starts at \"Ignition sequence start\" rather than the full \"T minus 15 seconds, guidance is internal\" preamble of the unedited recording. Known tiny.en quirks on this clip: \"Lift off on Apollo 11\" is misheard as \"Lift up\" or \"Lift us\"; \"Tower cleared\" sometimes becomes \"Power cleared\"."
+}

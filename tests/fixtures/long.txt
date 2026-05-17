@@ -1,0 +1,25 @@
+Many engineers begin their workday by reviewing the previous evening's deployments. They scan logs for unusual patterns. They check whether automated tests have completed. They look at error rates in production. This morning routine helps catch problems before users report them. It also creates a sense of continuity from one day to the next.
+
+After the review, most teams gather for a short meeting. The meeting is usually called a standup. Each person says what they finished yesterday. Each person also says what they plan to do today. If someone is blocked, they mention it. The team can then offer help or unblock the work. Standups should be short. Fifteen minutes is a good target. Longer meetings tend to lose focus.
+
+The rest of the morning is often the most productive time of the day. Many engineers prefer to work on hard problems during this window. Email and chat can wait. Notifications can be muted. Some people put on headphones to signal that they need quiet time. Others book a small meeting room and work alone. The exact approach matters less than the discipline of protecting focus.
+
+Lunch is a natural break point. After lunch, energy often dips. This is a good time for lighter tasks. Code review fits here. So do small refactors. Pair programming is another option. Working with a partner can keep you engaged when your own focus is weak. The afternoon dip is normal. It does not mean anything is wrong.
+
+Throughout the day, communication matters as much as code. A well-written commit message saves your teammates hours of confusion. A clear pull request description helps reviewers find the important changes. Documentation, while sometimes tedious to write, prevents the same questions from being asked again and again. Good engineers invest in writing. Their work compounds.
+
+Testing is another habit that compounds. A test written today protects every future change to the same code. The first few tests in a codebase feel slow to write. They establish patterns and infrastructure. Later tests benefit from that work. A team that invests early in testing moves faster later. A team that skips tests pays the price every time something breaks.
+
+Tools matter, but not as much as people sometimes think. The best tool is usually the one your team already knows well. Switching tools has a cost. New tools require learning. New tools require migration. New tools introduce new bugs. The benefit must outweigh those costs. Many tool decisions are made by enthusiasm rather than careful comparison. Be wary of that.
+
+End of day routines are as important as morning ones. A short reflection helps cement the day's lessons. What worked? What was harder than expected? What will you try differently tomorrow? Some engineers keep a daily log. Others discuss the day with a colleague. Either way, the reflection turns experience into improvement.
+
+Sleep matters more than most engineers admit. The brain consolidates learning during sleep. Hard problems often look different in the morning. Tired engineers write worse code and miss obvious mistakes. Protect your sleep. It is one of the highest leverage investments you can make in your work.
+
+The career of a software engineer is long. Habits compound over years. Reading widely makes you a better problem solver. Writing publicly clarifies your thinking. Mentoring others teaches you more than it teaches them. Asking good questions is itself a craft. None of these are urgent. All of them matter.
+
+Burnout is a real risk. It usually arrives slowly. The early signs are subtle. A loss of curiosity. A creeping sense that the work no longer matters. Difficulty concentrating. If you notice these signs, take them seriously. A week of rest now can prevent a month of recovery later. Talk to your manager. Talk to a friend. Burnout is not a character flaw. It is a signal.
+
+Every codebase has its quirks. Some quirks are reasonable adaptations to past constraints. Others are mistakes that nobody had time to fix. Learning to tell the difference is a slow skill. Be patient with the codebase you inherit. Be patient with the people who wrote it. Most code is written under pressure. Most code could be better. That is true of yours too.
+
+Finally, remember that software is built for people. The most elegant abstraction does not matter if nobody can use the resulting product. Talk to your users. Watch them work. Notice what frustrates them. Notice what delights them. The gap between what you think users want and what they actually want is almost always larger than you expect. Closing that gap is the most valuable thing an engineer can do.

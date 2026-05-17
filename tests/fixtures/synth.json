@@ -1,0 +1,10 @@
+{
+  "id": "synth",
+  "source": "Generated locally via macOS `say -v Samantha` on 2026-05-17, converted to 16 kHz mono WAV via afconvert, padded with trailing silence via ffmpeg `apad=whole_dur=5.0` so the duration is a clean integer second (avoids the producer's sub-second-remainder drop on Stop).",
+  "license": "Synthetic audio from macOS Apple TTS engine; no third-party license. Committed for deterministic CI input.",
+  "sampleRateHz": 16000,
+  "channels": 1,
+  "durationS": 5.0,
+  "transcript": "The weather is nice today. I am going to the park. We will have a great time together.",
+  "notes": "Female American English TTS. Different voice / phrasing / cadence than the JFK fixture so the integration suite is not biased to a single speaker. tiny.en transcribes this verbatim in the offline pass."
+}

@@ -269,11 +269,11 @@ These were intentionally deferred when the in-house VAD landed. None block shipp
 - **Subscribe the consumer to `onSpeechStart` / `onSpeechEnd`** so the anchor can trim aggressively during long silences. The state machine is wired and tested; only the subscriber is missing.
 - **Surface `VAD_SILENCE_THRESHOLD`** in the dev panel for live tuning.
 - **WebGPU EP for Silero**. Currently uses WASM only. Silero is sub-ms per frame on WASM SIMD; WebGPU setup cost would not pay off until we batch frames.
-- **Sub-second remainder on Stop**. The producer still drops the trailing partial chunk on stop. Pad with zeros and emit one final chunk so we do not lose up to 1 s of audio at end of recording. Tracked in `docs/improvements.md` as 3.6.
+- **Sub-second remainder on Stop**. The producer still drops the trailing partial chunk on stop. Pad with zeros and emit one final chunk so we do not lose up to 1 s of audio at end of recording. Tracked in the workspace improvements backlog as 3.6.
 
 ## References
 
-- `docs/improvements.md` section 5.1 (proposal), section 4.x (tests), section 3.x (memory).
+- Workspace improvements backlog: section 5.1 (proposal), section 4.x (tests), section 3.x (memory).
 - `docs/state-of-the-art.md` section 6: the broader VAD landscape (Silero, TEN, WebRTC, MarbleNet, pyannote).
 - Silero VAD upstream: `https://github.com/snakers4/silero-vad`.
 - ONNX Runtime Web docs (`env.wasm.wasmPaths`): `https://onnxruntime.ai/docs/tutorials/web/env-flags-and-session-options.html`.

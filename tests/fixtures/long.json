@@ -1,0 +1,10 @@
+{
+  "id": "long",
+  "source": "Pre-recorded TTS narration of long.txt, decoded to 16 kHz mono pcm_s16le and padded to a clean 335 s so the harness does not drop a sub-second remainder.",
+  "license": "Script text was written for this repo. Audio synthesised by a TTS service and committed for deterministic CI input.",
+  "sampleRateHz": 16000,
+  "channels": 1,
+  "durationS": 335.0,
+  "transcriptPath": "long.txt",
+  "notes": "Long-form regression fixture (~5.5 min of speech, 771 words, 13 paragraphs). Exercises sentence-end anchor trims, FAST_TRIM_THRESHOLD_S, drain over hundreds of ticks, and memory stability. Replace the WAV in place and rerun `npm run test:integration` to refresh the baseline."
+}

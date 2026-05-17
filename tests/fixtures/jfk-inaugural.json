@@ -1,0 +1,10 @@
+{
+  "id": "jfk-inaugural",
+  "source": "John F. Kennedy Inaugural Address (January 20, 1961). Audio sourced from https://archive.org/details/JohnF.KennedyInauguralAddress (a JFK Presidential Library & Museum recording mirrored on archive.org). Re-encoded from 44.1 kHz mono MP3 to 16 kHz mono pcm_s16le via ffmpeg, trimmed to a clean 720 s (12 minutes) starting from t=0.",
+  "license": "Public domain. Works of the United States federal government are not subject to copyright in the US under 17 U.S.C. § 105. Archive.org item metadata declares public domain (https://archive.org/download/JohnF.KennedyInauguralAddress/JohnF.KennedyInauguralAddress_meta.xml).",
+  "sampleRateHz": 16000,
+  "channels": 1,
+  "durationS": 720.0,
+  "transcriptPath": "jfk-inaugural.txt",
+  "notes": "Long-session stress fixture (~12 min real human speech, ~720 ticks). Continuous monologue with no silences longer than 3 s (verified at -30 dB) so the pipeline never idles for extended periods. Tests memory stability, inference-loop endurance, and per-tick latency drift over hundreds of ticks. The full speech is ~14 min; the audio is trimmed to a clean 720 s and ends BEFORE the famous \"ask not what your country can do for you\" line at 12:52. The full transcript is committed in jfk-inaugural.txt; expect the end-to-end WER to absorb ~5-10pp from the trimmed final paragraphs that are present in the transcript but not the audio. Streaming penalty is the more meaningful metric on this fixture."
+}
