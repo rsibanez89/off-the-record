@@ -48,8 +48,8 @@ export const MODELS = [
   },
   {
     id: 'distil-whisper/distil-large-v3.5-ONNX',
-    liveLabel: 'distil-large-v3.5 (native streaming, ~500 MB, may lag on slow hardware)',
-    batchLabel: 'distil-large-v3.5 (HF/distil, ~500 MB, beats turbo on OOD WER)',
+    liveLabel: 'distil-large-v3.5 (native streaming, fp16 encoder, ~300 MB)',
+    batchLabel: 'distil-large-v3.5 (HF/distil, fp16 encoder, ~300 MB, beats turbo on OOD WER)',
     supportsWordTimestamps: false,
     streamingPolicy: 'native' as LiveStreamingPolicy,
   },

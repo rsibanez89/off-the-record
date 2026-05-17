@@ -7,7 +7,7 @@
 
 import type { TimedWord } from './hypothesisBuffer';
 import { isHallucinationWord } from './heuristics';
-import { isMoonshine, isTurbo, type ModelId } from '../audio';
+import { isDistil, isMoonshine, isTurbo, type ModelId } from '../audio';
 
 export type Backend = 'webgpu' | 'wasm';
 
@@ -66,17 +66,26 @@ export async function createPipeline(
   }
   // Encoder dtype:
   //   - Turbo on WebGPU has a published fp16 encoder; we use it for speed.
-  //   - All other Whisper-family checkpoints (tiny.en, distil) stay fp32
-  //     for accuracy; their fp16 exports either do not exist or measurably
-  //     degrade noisy/accented speech.
-  //   - Moonshine ships pre-quantized encoder+decoder files (q8). fp32 here
+  //   - Distil-large-v3.5 fp32 encoder is ~500 MB single contiguous, which
+  //     transformers.js cannot allocate on a typical fragmented browser
+  //     heap (RangeError: Array buffer allocation failed). fp16 (~250 MB)
+  //     halves the size while keeping precision the encoder benefits
+  //     from. Smaller dtypes (int8, q4) were tried: int8 needs a
+  //     ConvInteger operator that ORT-node does not ship; q4 is
+  //     state-of-the-art-doc-flagged as degrading accuracy on noisy or
+  //     accented speech. fp16 is the safest middle ground.
+  //   - tiny.en stays fp32 (small enough, no allocation pressure).
+  //   - Moonshine ships pre-quantized encoder+decoder files. fp32 here
   //     would 404 because the matching files are not published.
   // Decoder stays q4 across Whisper-family models for the speed win.
   const turbo = isTurbo(modelId);
   const moonshine = isMoonshine(modelId);
+  const distil = isDistil(modelId);
   let dtype: Record<string, string>;
   if (moonshine) {
     dtype = { encoder_model: 'q8', decoder_model_merged: 'q8' };
+  } else if (distil) {
+    dtype = { encoder_model: 'fp16', decoder_model_merged: 'q4' };
   } else if (backend === 'webgpu') {
     dtype = { encoder_model: turbo ? 'fp16' : 'fp32', decoder_model_merged: 'q4' };
   } else {
