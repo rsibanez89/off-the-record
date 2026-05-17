@@ -56,6 +56,21 @@ export const MAX_PROMPT_CHARS = 800;
  * mid-sentence speech produces fragmented hallucinated output ("Trying to
  * walk" instead of "trying to identify"); 2 s gives the encoder enough
  * context for coherent continuation. Bumping further trades latency for
- * quality; if 2 s shows seam loss, try 2.5 s or 3 s next.
+ * quality.
  */
 export const NATIVE_STREAMING_WINDOW_S = 2.0;
+
+/**
+ * How much audio overlap each native-streaming tick reuses from the prior
+ * window. Without overlap, words straddling the seam between windows get
+ * cut and partially re-decoded ("country country", "I am going going to
+ * the park"). The matrix measured up to +40 pp WER from this on apollo11
+ * vs the one-shot baseline.
+ *
+ * With overlap, each window includes the last N seconds of the previous
+ * window as a prefix. The model re-emits the overlap words; we strip the
+ * head of the new output against the tail of committed text (same
+ * normalised-text comparison `HypothesisBuffer.stripCommittedTailOverlap`
+ * uses for LA-2). The net advance per tick is window - overlap.
+ */
+export const NATIVE_STREAMING_OVERLAP_S = 0.5;

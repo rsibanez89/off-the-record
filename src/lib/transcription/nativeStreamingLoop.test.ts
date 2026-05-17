@@ -240,6 +240,45 @@ describe('NativeStreamingLoop', () => {
     expect((calls[1].opts.prompt_ids as number[]).length).toBeGreaterThan(0);
   });
 
+  it('strips overlap re-emission at the seam between consecutive ticks', async () => {
+    // Tick 1 emits "alpha beta". Tick 2 (with the overlap prefix re-fed)
+    // emits "beta gamma": the model re-decodes the overlap audio and
+    // re-emits "beta" at the head. Dedup must strip "beta" so the
+    // committed transcript is ["alpha", "beta", "gamma"], not
+    // ["alpha", "beta", "beta", "gamma"]. Without this, the matrix
+    // showed +14 to +40 pp WER from doubled seam words.
+    const audioRepo = new FakeAudioRepo();
+    const transcriptRepo = new FakeTranscriptRepo();
+    audioRepo.push({ startedAt: 0, samples: secondOfSpeech(), speechProbability: 0.9 });
+    audioRepo.push({ startedAt: 1, samples: secondOfSpeech(), speechProbability: 0.9 });
+    const { pipeline } = scriptedPipeline([
+      {
+        text: ' alpha beta',
+        chunks: [
+          { text: ' alpha', timestamp: [0, 0.5] },
+          { text: ' beta', timestamp: [0.5, 1.0] },
+        ],
+      },
+      {
+        text: ' beta gamma',
+        chunks: [
+          { text: ' beta', timestamp: [0, 0.5] },
+          { text: ' gamma', timestamp: [0.5, 1.0] },
+        ],
+      },
+    ]);
+    const loop = new NativeStreamingLoop({ pipeline, audioRepo, transcriptRepo, modelId: MOONSHINE });
+
+    await loop.tick();
+    expect(loop.getCommittedWordCount()).toBe(2);
+
+    audioRepo.push({ startedAt: 2, samples: secondOfSpeech(), speechProbability: 0.9 });
+    audioRepo.push({ startedAt: 3, samples: secondOfSpeech(), speechProbability: 0.9 });
+    await loop.tick();
+    expect(loop.getCommittedWordCount()).toBe(3);
+    expect(transcriptRepo.rows.map((r) => r.text)).toEqual(['alpha', 'beta', 'gamma']);
+  });
+
   it('reset clears committed words and anchor', async () => {
     const audioRepo = new FakeAudioRepo();
     const transcriptRepo = new FakeTranscriptRepo();
