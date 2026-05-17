@@ -15,8 +15,9 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { MODELS, isMultilingual, type ModelId } from '../../src/lib/audio';
+import { MODELS, isMultilingual, supportsWordTimestamps, type ModelId } from '../../src/lib/audio';
 import { runWhisper } from '../../src/lib/transcription/whisperAdapter';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createNodeWhisperPipeline } from '../integration/lib/whisperNode';
 import { loadGroundtruth, loadWav16kMono } from '../integration/lib/fixture';
 import { wer, normalizeForScoring } from '../integration/lib/metrics';
@@ -51,6 +52,7 @@ describe('Model matrix vs synth fixture (5 s, clean English TTS)', () => {
         const result = await runWhisper(pipeline, fixture.samples, {
           language: isMultilingual(m.id) ? 'en' : undefined,
           offsetSeconds: 0,
+          requestWordTimestamps: supportsWordTimestamps(m.id),
         });
         const durationMs = performance.now() - t0;
         const transcript = result.words
@@ -92,20 +94,42 @@ describe('Model matrix vs synth fixture (5 s, clean English TTS)', () => {
     }, 300_000);
   }
 
-  it('prints aggregated matrix table', () => {
-    /* eslint-disable no-console */
-    console.log('\n## Model matrix vs synth fixture');
-    console.log('');
-    console.log('| Model | WER | Words | Inference (ms) | Status |');
-    console.log('|---|---|---|---|---|');
+  it('writes aggregated matrix report', () => {
+    // Vitest's default reporter swallows console.log on passing tests, so
+    // we persist the matrix report to disk where the user (and a future
+    // diff) can read it. The file is `.gitignore`d by the bench's parent
+    // `.bench/` convention; we put it alongside the matrix test.
+    const outDir = join(__dirname, '.output');
+    mkdirSync(outDir, { recursive: true });
+    const lines: string[] = [];
+    lines.push('# Model matrix vs synth fixture (5 s, clean English TTS)');
+    lines.push('');
+    lines.push('| Model | WER | Words | Inference (ms) | Status |');
+    lines.push('|---|---|---|---|---|');
     for (const r of rows) {
-      const status = r.error ? `❌ ${r.error}` : r.werRate < 0.2 ? '✅' : r.werRate < 0.5 ? '⚠️' : '❌ garbage';
-      console.log(
+      const status = r.error
+        ? `❌ ${r.error.slice(0, 80)}`
+        : r.werRate < 0.2
+          ? '✅'
+          : r.werRate < 0.5
+            ? '⚠️ borderline'
+            : '❌ garbage';
+      lines.push(
         `| \`${r.modelId}\` | ${(r.werRate * 100).toFixed(1)}% | ${r.wordCount} | ${r.durationMs.toFixed(0)} | ${status} |`,
       );
     }
-    console.log('');
-    /* eslint-enable no-console */
+    lines.push('');
+    lines.push('## Per-model transcripts');
+    lines.push('');
+    for (const r of rows) {
+      lines.push(`### \`${r.modelId}\``);
+      lines.push('');
+      if (r.error) lines.push(`**Error:** ${r.error}`);
+      else lines.push(`**Transcript:** ${r.transcript}`);
+      lines.push('');
+    }
+    writeFileSync(join(outDir, 'report.md'), lines.join('\n'));
+    writeFileSync(join(outDir, 'report.json'), JSON.stringify(rows, null, 2));
     expect(rows.length).toBeGreaterThan(0);
   });
 });

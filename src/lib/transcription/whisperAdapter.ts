@@ -126,6 +126,16 @@ export interface WhisperRunOptions {
    * (a common large-v3-turbo failure mode on isolated short windows).
    */
   initialPrompt?: string;
+  /**
+   * Whether to request `return_timestamps: 'word'` from the pipeline.
+   * Defaults to true (the live LA-2 path always needs it). Callers that
+   * use a model whose ONNX export does not surface cross-attention (e.g.
+   * `distil-whisper/distil-large-v3.5-ONNX`, `onnx-community/moonshine-*`)
+   * must pass false; otherwise transformers.js throws "Model outputs must
+   * contain cross attentions to extract timestamps". `parseResult` falls
+   * through to the text-only synthesis path in that case.
+   */
+  requestWordTimestamps?: boolean;
 }
 
 interface WhisperChunk {
@@ -138,16 +148,19 @@ export async function runWhisper(
   samples: Float32Array,
   opts: WhisperRunOptions
 ): Promise<WhisperRunResult> {
+  const requestWordTimestamps = opts.requestWordTimestamps ?? true;
   const callOpts: Record<string, unknown> = {
     chunk_length_s: 30,
     stride_length_s: 0,
-    return_timestamps: 'word',
     no_repeat_ngram_size: 3,
     // Explicit greedy decoding. transformers.js usually defaults this way,
     // but being explicit avoids surprises across versions.
     top_k: 0,
     do_sample: false,
   };
+  if (requestWordTimestamps) {
+    callOpts.return_timestamps = 'word';
+  }
   if (opts.language) {
     callOpts.language = opts.language;
     callOpts.task = 'transcribe';

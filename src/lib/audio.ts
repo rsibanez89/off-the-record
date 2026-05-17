@@ -83,6 +83,18 @@ export function isValidModel(id: string | null): id is ModelId {
 }
 
 /**
+ * True when the model's ONNX export emits cross-attention outputs (so
+ * transformers.js can compute per-word timestamps via DTW). Callers of
+ * `runWhisper` should pass the result as `requestWordTimestamps` so
+ * unsupported models do not trip the "Model outputs must contain cross
+ * attentions to extract timestamps" error.
+ */
+export function supportsWordTimestamps(id: ModelId): boolean {
+  const m = MODELS.find((entry) => entry.id === id);
+  return m?.supportsWordTimestamps ?? false;
+}
+
+/**
  * `.en` variants are English-only and don't carry language/task tokens, so
  * passing them throws in transformers.js. Multilingual checkpoints (turbo,
  * distil-large-v3.5, moonshine) need explicit language/task.

@@ -1,6 +1,12 @@
 /// <reference lib="webworker" />
 import { type TranscriptToken } from '../lib/db';
-import { TARGET_SAMPLE_RATE, DEFAULT_MODEL, isMultilingual, type ModelId } from '../lib/audio';
+import {
+  TARGET_SAMPLE_RATE,
+  DEFAULT_MODEL,
+  isMultilingual,
+  supportsWordTimestamps,
+  type ModelId,
+} from '../lib/audio';
 import { type Backend } from '../lib/transcription/whisperAdapter';
 import { WhisperEngine } from '../lib/transcription/whisperEngine';
 import { DexieAudioArchiveRepository } from '../lib/repositories/dexieRepositories';
@@ -80,6 +86,11 @@ async function transcribe(sessionId: number) {
     const result = await engine.run(samples, {
       language: isMultilingual(modelId) ? 'en' : undefined,
       offsetSeconds: 0,
+      // Models without cross-attention exports (distil-large-v3.5,
+      // moonshine) cannot satisfy `return_timestamps: 'word'`. The text-
+      // only fallback in `parseResult` synthesises evenly-distributed
+      // word entries so the batch panel still renders a transcript.
+      requestWordTimestamps: supportsWordTimestamps(modelId),
     });
     const inferenceMs = performance.now() - t0;
     const tokens: TranscriptToken[] = result.words.map((w, i) => ({
