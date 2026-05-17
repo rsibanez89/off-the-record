@@ -44,9 +44,44 @@ export class HypothesisBuffer {
    * stats; the buffer also stores them internally).
    */
   ingest(hypothesis: TimedWord[]): TimedWord[] {
-    const next = this.dropAlreadyCovered(hypothesis);
+    const live = this.dropFlatTimestampTail(hypothesis);
+    const next = this.dropAlreadyCovered(live);
     const deduped = this.stripCommittedTailOverlap(next);
     return this.runLocalAgreement(deduped);
+  }
+
+  /**
+   * Truncate the hypothesis at the start of a Whisper "flat-timestamp" run:
+   * 3 or more consecutive words whose `start` times differ by less than 10 ms.
+   *
+   * Why: Whisper enters a long-form repetition loop at low-energy paragraph
+   * boundaries and emits an autoregressive repeat of recently-committed real
+   * content with every word's start time clamped to the audio window's `t1`.
+   * Two consecutive windows produce the same flat-timestamp tail, LA-2 in
+   * `runLocalAgreement` confirms them, and they enter `committed` as a
+   * duplicate of the real prefix. `stripCommittedTailOverlap` misses these
+   * because their head does NOT match the committed tail (the repeat is
+   * positionally shifted), and `dropAlreadyCovered` misses them because
+   * Whisper assigns fresh in-window timestamps. The cheapest defense is to
+   * detect the flat-timestamp signature itself and drop the tail before LA-2
+   * sees it. The pattern is highly specific to model failure: on the `long`
+   * fixture's streamed transcript every observed 3+ flat-start run was a
+   * hallucination, with zero false positives in legitimate committed content.
+   */
+  private dropFlatTimestampTail(words: TimedWord[]): TimedWord[] {
+    const RUN = 3;
+    const EPS = 0.01;
+    for (let i = 0; i + RUN <= words.length; i++) {
+      let flat = true;
+      for (let k = 1; k < RUN; k++) {
+        if (Math.abs(words[i + k].start - words[i].start) > EPS) {
+          flat = false;
+          break;
+        }
+      }
+      if (flat) return words.slice(0, i);
+    }
+    return words;
   }
 
   /**

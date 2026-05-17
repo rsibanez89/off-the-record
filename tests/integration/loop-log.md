@@ -44,6 +44,13 @@ Append-only. One block per attempt. See `docs/AUTONOMOUS-LOOP.md` for the protoc
 - Reverted: 4 (5.14 drop-tentative, jitter 0.05, jitter 0.2, k-cap 50).
 - Stopped because (a) hit the 5-attempt cap, (b) the last three iterations were all neutral/regression reverts (the protocol's other stop condition), and (c) the small-scoped levers in the in-scope list are exhausted at this baseline. The obvious remaining duplication on `long` likely needs an investigative pass on the actual streamed transcript rather than another blind parameter sweep.
 
+## 2026-05-17T17:40Z | 5.15 dropFlatTimestampTail pre-filter
+
+- Verdict: improvement
+- Action: committed (promoted to baseline)
+- WER deltas per fixture: apollo11 +0.00pp, jfk +0.00pp, jfk-inaugural -7.77pp, long -16.21pp, synth +0.00pp
+- Notes: Implemented the sub-agent's design. New private method `HypothesisBuffer.dropFlatTimestampTail(words)` truncates the hypothesis at the first run of 3+ consecutive words whose `start` differs by less than 10 ms. Called from `ingest()` BEFORE `dropAlreadyCovered`. Result is a massive win on both long-form fixtures: `long` WER 25.16% -> 8.95%, jfk-inaugural 27.55% -> 19.78%. Apollo 11 did NOT move, meaning its trailing garbage is a different mechanism (the hallucinated tokens there don't share start timestamps); 5.14 stays open. The pattern is so specific to Whisper's repetition-loop failure mode that the threshold has plenty of margin: zero false positives observed on legitimate content. This is the biggest single win the bench has measured.
+
 ## 2026-05-17T17:30Z | investigation: long-fixture duplications (sub-agent, no code change)
 
 - Verdict: investigative (no bench, no commit)

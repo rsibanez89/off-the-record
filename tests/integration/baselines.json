@@ -15,8 +15,8 @@
       "werOfflineVsGt": 0.15625,
       "streamingPenaltyPp": 12.5,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 5165.432584000001,
-      "realtimeFactor": 4.839865702136516,
+      "totalInferenceMs": 4876.564080999998,
+      "realtimeFactor": 5.126560337308938,
       "latencyDriftQ4Q1": null
     },
     "jfk-inaugural": {
@@ -27,14 +27,14 @@
       "inferenceTicks": 712,
       "forceSlideTicks": 7,
       "hallucinationDeferTicks": 1,
-      "werVsGt": 0.2754578754578755,
-      "cerVsGt": 0.2195519348268839,
+      "werVsGt": 0.1978021978021978,
+      "cerVsGt": 0.15709436524100476,
       "werOfflineVsGt": 0.5838827838827839,
-      "streamingPenaltyPp": -30.842490842490843,
+      "streamingPenaltyPp": -38.60805860805861,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 147621.09044600016,
-      "realtimeFactor": 4.877351859579822,
-      "latencyDriftQ4Q1": 0.9993713478860431
+      "totalInferenceMs": 143429.02304300014,
+      "realtimeFactor": 5.019904512520757,
+      "latencyDriftQ4Q1": 0.9998320600653737
     },
     "jfk": {
       "fixtureId": "jfk",
@@ -49,8 +49,8 @@
       "werOfflineVsGt": 0.045454545454545456,
       "streamingPenaltyPp": 0,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 2481.316458999999,
-      "realtimeFactor": 4.433130631162272,
+      "totalInferenceMs": 2468.432248,
+      "realtimeFactor": 4.456269767546806,
       "latencyDriftQ4Q1": null
     },
     "long": {
@@ -58,16 +58,16 @@
       "model": "onnx-community/whisper-tiny.en_timestamped",
       "durationS": 335,
       "ticks": 335,
-      "inferenceTicks": 310,
-      "forceSlideTicks": 0,
-      "hallucinationDeferTicks": 1,
-      "werVsGt": 0.251621271076524,
-      "cerVsGt": 0.19705751226036558,
+      "inferenceTicks": 334,
+      "forceSlideTicks": 1,
+      "hallucinationDeferTicks": 0,
+      "werVsGt": 0.08949416342412451,
+      "cerVsGt": 0.07155595185020062,
       "werOfflineVsGt": 0.47470817120622566,
-      "streamingPenaltyPp": -22.308690012970168,
+      "streamingPenaltyPp": -38.521400778210115,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 60304.071577000075,
-      "realtimeFactor": 5.555180458623771,
+      "totalInferenceMs": 65143.758384999834,
+      "realtimeFactor": 5.142472714272162,
       "latencyDriftQ4Q1": null
     },
     "synth": {
@@ -83,8 +83,8 @@
       "werOfflineVsGt": 0,
       "streamingPenaltyPp": 0,
       "hallucinationStrings": 0,
-      "totalInferenceMs": 1298.6544999999996,
-      "realtimeFactor": 3.8501387397494877,
+      "totalInferenceMs": 1305.9779160000003,
+      "realtimeFactor": 3.828548659776877,
       "latencyDriftQ4Q1": null
     }
   }

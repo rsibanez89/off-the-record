@@ -182,6 +182,42 @@ describe('HypothesisBuffer', () => {
     expect(buf.getLastCommittedTime()).toBe(0);
   });
 
+  it('dropFlatTimestampTail truncates a 3+ run of words with identical start times before LA-2', () => {
+    // Whisper hallucination signature on long-form low-energy boundaries:
+    // the autoregressive loop emits a repeat with every word's start clamped
+    // to the window's t1. Here, the real prefix has incrementing starts and
+    // the hallucinated tail collapses to a flat 5.0 s.
+    const buf = new HypothesisBuffer();
+    const hypothesis = [
+      word('be', 4.3, 4.6),
+      word('patient', 4.6, 4.9),
+      // Flat tail starts here: three words at 5.0 s exactly.
+      word('be', 5.0, 5.0),
+      word('patient', 5.0, 5.0),
+      word('with', 5.0, 5.0),
+    ];
+    // First ingest: tail is truncated, real prefix becomes tentative.
+    buf.ingest(hypothesis);
+    expect(buf.getTentative().map((w) => w.text)).toEqual(['be', 'patient']);
+    // Second identical ingest: LA-2 confirms the real prefix.
+    buf.ingest(hypothesis);
+    expect(buf.getCommitted().map((w) => w.text)).toEqual(['be', 'patient']);
+    expect(buf.getTentative()).toEqual([]);
+  });
+
+  it('dropFlatTimestampTail leaves natural fast speech (2 consecutive identical starts) untouched', () => {
+    // A 2-word run at the same start is below threshold (RUN=3). Legitimate
+    // very-fast speech and Whisper's normal jitter can produce these; they
+    // must not be dropped.
+    const buf = new HypothesisBuffer();
+    buf.ingest([
+      word('one', 1.0, 1.1),
+      word('two', 2.0, 2.1),
+      word('three', 2.0, 2.2),
+    ]);
+    expect(buf.getTentative().map((w) => w.text)).toEqual(['one', 'two', 'three']);
+  });
+
   it('reset clears committed, tentative, and lastCommittedTime', () => {
     const buf = new HypothesisBuffer();
     buf.ingest([word('hello', 0, 0.5)]);
