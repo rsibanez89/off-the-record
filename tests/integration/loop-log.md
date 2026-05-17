@@ -37,12 +37,26 @@ Append-only. One block per attempt. See `docs/AUTONOMOUS-LOOP.md` for the protoc
 - WER deltas per fixture: apollo11 +0.00pp, jfk +0.00pp, jfk-inaugural +0.00pp, long +0.00pp, synth +0.00pp
 - Notes: Hypothesis: maybe boundary overlaps even longer than 20 words exist on the long-form fixtures. Bench result: identical metrics across all five fixtures. k=20 already covered every overlap that matters here; the rest is bounded by `dropAlreadyCovered` + the boundary-start short-circuit. Confirms k=20 is the right setting; pushing higher is wasted comparisons.
 
-## Session summary
+## Session summary (run 1, ended 17:17Z)
 
 - Attempts: 5 (the loop's hard cap).
 - Committed: 1 (5.13 k-cap 5 -> 20). Baseline JFK-inaugural WER dropped from 28.06% to 27.55%.
 - Reverted: 4 (5.14 drop-tentative, jitter 0.05, jitter 0.2, k-cap 50).
 - Stopped because (a) hit the 5-attempt cap, (b) the last three iterations were all neutral/regression reverts (the protocol's other stop condition), and (c) the small-scoped levers in the in-scope list are exhausted at this baseline. The obvious remaining duplication on `long` likely needs an investigative pass on the actual streamed transcript rather than another blind parameter sweep.
+
+## Session summary (run 2, ended 17:51Z)
+
+- Attempts: 2 (one improvement, one regression).
+- Committed: 1 (5.15 `dropFlatTimestampTail`, commit `1c597aa`). MASSIVE win: `long` WER 25.16% -> 8.95% (-16.21pp), jfk-inaugural 27.55% -> 19.78% (-7.77pp).
+- Reverted: 1 (`dropAlreadyCovered` start-based filter, hard JFK regression).
+- Stopped voluntarily after the regression: the biggest tractable algorithm-side wins are now banked, Apollo 11's residual has no clean single-file remedy per the second sub-agent investigation, and continuing risks burning more wall-time on diminishing returns. The investigative-sub-agent recipe worked beautifully on `long` (5.15); applied again to Apollo 11 (next-iteration entry above), it honestly returned "no clean fix" plus a fix that bench-regressed, which is also a valuable signal.
+
+## 2026-05-17T17:51Z | dropAlreadyCovered: filter by START instead of END
+
+- Verdict: regression (hard test failures, comparator did not run)
+- Action: reverted
+- WER deltas per fixture: n/a (vitest exited non-zero on 3 JFK assertion failures: CER 16.3% vs baseline 1.9%, streaming penalty 9.1% vs baseline 0%, committed-words count drop)
+- Notes: Sub-agent investigation of Apollo 11's residual trailing-garbage tokens proposed switching `dropAlreadyCovered`'s filter from `w.end > cutoff` to `w.start > cutoff`. Hypothesis: catch hallucinated boundary-anchored words like `plan` whose end sits exactly at `lastCommittedTime` but whose start precedes it. The sub-agent honestly flagged that the fix would only remove 1 of 6 bad tokens and that "any fixture where Whisper drifts the textual head while keeping the start before lastCommittedTime would have that drift suppressed earlier". That risk materialised hard on the JFK fixture: legitimate boundary words got dropped, causing CER to balloon. Lesson: in the LA-2 pipeline, the filter ORDER matters. `dropAlreadyCovered` is the upstream defence against re-emission; tightening it is more dangerous than tightening `stripCommittedTailOverlap` because there is no downstream rescue. If we want to attack Apollo 11's residual we need a different lever, probably a confidence proxy on `tentative` words rather than a boundary-time filter.
 
 ## 2026-05-17T17:40Z | 5.15 dropFlatTimestampTail pre-filter
 
