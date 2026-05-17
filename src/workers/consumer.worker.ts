@@ -9,6 +9,7 @@ import {
   runWhisper,
   type Backend,
 } from '../lib/transcription/whisperAdapter';
+import { VAD_SILENCE_THRESHOLD } from '../lib/config';
 
 // Window-size policy. Whisper is trained on 30 s windows. Growth beyond
 // MAX_WINDOW_S is bounded by a force-slide safety net.
@@ -147,19 +148,54 @@ async function init(id: ModelId) {
   scheduleTick();
 }
 
-async function collectAudioFrom(startS: number): Promise<{ samples: Float32Array; t0: number; t1: number } | null> {
+interface CollectedAudio {
+  samples: Float32Array;
+  t0: number;
+  t1: number;
+  /**
+   * Maximum `speechProbability` across all chunks in this window. `undefined`
+   * means we cannot trust a VAD verdict for this window: either no chunk in
+   * the window had a verdict yet (VAD was still loading), OR at least one
+   * chunk lacked a verdict and would have masked real speech if we summarised
+   * only the verdicted subset. The consumer must fall back to RMS in this
+   * case. See the silence-gate path in `runOnce`.
+   */
+  speechProbability: number | undefined;
+}
+
+async function collectAudioFrom(startS: number): Promise<CollectedAudio | null> {
   const chunks = await db.chunks.where('startedAt').aboveOrEqual(startS).sortBy('startedAt');
   if (chunks.length === 0) return null;
   const total = chunks.reduce((s, c) => s + c.samples.length, 0);
   const out = new Float32Array(total);
   let offset = 0;
+  // `maxProb` is sentinel-initialised to -1 so the first verdicted chunk
+  // always wins. When `allVerdicted` ends up true we are guaranteed to have
+  // seen at least one chunk (chunks.length > 0) with a probability in
+  // [0, 1], so the return path can read `maxProb` unconditionally.
+  let maxProb = -1;
+  let allVerdicted = true;
   for (const c of chunks) {
     out.set(c.samples, offset);
     offset += c.samples.length;
+    if (c.speechProbability === undefined) {
+      // A single undefined chunk poisons the whole window: max() over the
+      // verdicted subset would mask real speech in the undefined one. Force
+      // the caller onto the RMS fallback instead of producing a confident
+      // wrong answer.
+      allVerdicted = false;
+    } else if (c.speechProbability > maxProb) {
+      maxProb = c.speechProbability;
+    }
   }
   const t0 = chunks[0].startedAt;
   const t1 = t0 + total / TARGET_SAMPLE_RATE;
-  return { samples: out, t0, t1 };
+  return {
+    samples: out,
+    t0,
+    t1,
+    speechProbability: allVerdicted ? maxProb : undefined,
+  };
 }
 
 async function writeTranscript(): Promise<void> {
@@ -220,12 +256,21 @@ async function runOnce(minDur: number = MIN_WINDOW_S) {
   // Silence detection happens before inference. On silence we force-commit any
   // tentative words (we know there won't be further agreement) and skip
   // Whisper entirely, advancing the anchor past the silent region.
-  if (isSilent(audio.samples)) {
+  //
+  // Prefer the per-chunk Silero VAD probability when available. The RMS
+  // heuristic stays as a fallback for the first half-second of a session
+  // (VAD still loading) and as a safety net if VAD fails to initialise.
+  const vadVerdict = audio.speechProbability;
+  const isVadSilent =
+    vadVerdict !== undefined ? vadVerdict < VAD_SILENCE_THRESHOLD : isSilent(audio.samples);
+  if (isVadSilent) {
     const committed = hypBuffer.forceCommit();
     await writeTranscript();
     await advanceAnchor(audio.t1);
     lastTickKind = 'silence';
-    log(`[consumer] silence dur=${dur.toFixed(2)}s rms=${rms(audio.samples).toFixed(4)} force-committed=${committed.length}`);
+    const reason =
+      vadVerdict !== undefined ? `vad=${vadVerdict.toFixed(3)}` : `rms=${rms(audio.samples).toFixed(4)}`;
+    log(`[consumer] silence dur=${dur.toFixed(2)}s ${reason} force-committed=${committed.length}`);
     return;
   }
 

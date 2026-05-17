@@ -61,6 +61,12 @@ export function isSentenceEnd(text: string): boolean {
   return last === '.' || last === '?' || last === '!';
 }
 
+/**
+ * @deprecated since Silero VAD landed (improvement 5.1). Prefer
+ * `AudioChunk.speechProbability` written by the producer worker, gated by
+ * `VAD_SILENCE_THRESHOLD` in `src/lib/config.ts`. Kept as a fallback for
+ * the half-second of a session when VAD is still loading.
+ */
 export function rms(samples: Float32Array): number {
   if (samples.length === 0) return 0;
   let sum = 0;
@@ -68,6 +74,9 @@ export function rms(samples: Float32Array): number {
   return Math.sqrt(sum / samples.length);
 }
 
+/**
+ * @deprecated since Silero VAD landed (improvement 5.1). See `rms`.
+ */
 export function isSilent(samples: Float32Array, threshold = SILENCE_RMS_THRESHOLD): boolean {
   return rms(samples) < threshold;
 }

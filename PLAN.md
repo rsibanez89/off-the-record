@@ -19,10 +19,11 @@ The app prefers WebGPU when available and falls back to WASM. Audio capture star
 
 - **Producer worker** (`producer.worker.ts`)
   - Receives raw context-rate `Float32Array` frames from the main thread.
-  - Linearly resamples to 16 kHz mono and buffers into 1-second chunks.
+  - Linearly resamples to 16 kHz mono and buffers into 1-second chunks (typed ring buffer).
+  - Runs **Silero VAD v5** (`src/lib/vad/`) on every 512-sample (32 ms) 16 kHz frame as samples arrive. Tracks `max(speechProbability)` for the outgoing 1-second chunk. VAD load is lazy and fire-and-forget on first Record; chunks written before VAD is ready carry `speechProbability: undefined` and the consumer falls back to RMS.
   - Writes each chunk to **two** IDB tables in one transaction:
-    - `db.chunks`: live, evictable (the live consumer deletes as the anchor advances).
-    - `db.audioArchive`: kept until next Record or Clear (input to the batch worker).
+    - `db.chunks`: live, evictable (the live consumer deletes as the anchor advances). Carries `speechProbability?: number`.
+    - `db.audioArchive`: kept until next Record or Clear (input to the batch worker). Same shape.
   - Posts `BroadcastChannel('new-chunk')` as a wake-up notification only. Audio payload never leaves IDB after this write.
   - Acknowledges `stop` with `stopped` so the main thread can wait before flushing the consumer and before triggering the batch run.
 
@@ -73,7 +74,7 @@ The live consumer uses the **LocalAgreement-2** algorithm (Macháček, Dabre, Bo
   3. Walk the new hypothesis and `tentative` in parallel. Every word that matches (case- and punctuation-normalised) graduates to `committed`. Stop at the first mismatch. The surviving tail of the new hypothesis becomes the next `tentative`.
 - **Once a word is committed it is monotonically stable.** No flicker back to grey.
 - Standalone dash artefacts and known hallucination fillers are filtered at the word and line level.
-- Silence (RMS below threshold) force-commits any tentative buffer, advances the anchor past the silent region, and discards those chunks. Silent audio carries no transcribable content.
+- **Silence gate: Silero VAD first, RMS fallback.** For each window the consumer collects per-chunk `speechProbability` and computes the window's verdict as `max(...)`. If the verdict is below `VAD_SILENCE_THRESHOLD` (0.3, in `src/lib/config.ts`), the window is silent: force-commit any tentative buffer, advance the anchor past the silent region, discard those chunks. If ANY chunk in the window lacks a VAD verdict (VAD was still loading, or has failed for this tab), the window falls back to the RMS check in `heuristics.ts::isSilent`. Treating partial coverage as "max over verdicted chunks only" would silently drop real speech in the unverdicted chunks, so the all-or-nothing rule is load-bearing.
 - Full-line hallucinations are detected AFTER the silence gate, so by definition they fire on non-silent audio. This means the model has failed (small model + short context), not that the audio is empty. The handler does NOT advance the anchor and does NOT discard chunks; it just defers the tick and lets the audio buffer grow so the next inference has more context. If hallucinations persist long enough that the window exceeds `MAX_WINDOW_S`, the force-slide safety net commits and trims.
 - A `MAX_WINDOW_S` safety net force-slides if the window grows beyond 24 s without any natural commit (continuous unstable speech).
 - On `stop`, the consumer drains available chunks through LocalAgreement-2 until the state settles or the safety cap fires, force-commits any remaining tentative buffer, rewrites the transcript as final, clears chunks, and posts `flush-done`.
@@ -137,18 +138,25 @@ src/
 │   ├── consumer.worker.ts    live LocalAgreement-2 streaming
 │   └── batch.worker.ts       one-shot Whisper on Stop
 └── lib/
-    ├── db.ts                  Dexie schema, clearAll
+    ├── db.ts                  Dexie v4 schema (chunks + audioArchive carry speechProbability), clearAll
     ├── audio.ts               models, sample rate, isMultilingual, isTurbo
-    └── transcription/
-        ├── hypothesisBuffer.ts   LocalAgreement-2 (pure algorithm)
-        ├── heuristics.ts          silence / hallucination detection
-        └── whisperAdapter.ts      pipeline creation, backend detection, runWhisper
+    ├── config.ts              VAD_SILENCE_THRESHOLD and centralised tunables
+    ├── transcription/
+    │   ├── hypothesisBuffer.ts   LocalAgreement-2 (pure algorithm)
+    │   ├── heuristics.ts          hallucination detection + RMS silence fallback
+    │   └── whisperAdapter.ts      pipeline creation, backend detection, runWhisper
+    └── vad/                   in-house Silero VAD v5 (VadEngine interface, SileroVad, Framer,
+                                LinearResampler, VadStateMachine, NoopVadEngine, createVadEngine)
 
 public/
-└── audio-worklet.js
+├── audio-worklet.js
+└── models/                    silero_vad_v5.onnx (sha256-pinned, fetched by scripts/fetch-models.mjs)
+
+scripts/
+└── fetch-models.mjs           predev/prebuild provisioner for the Silero ONNX
 ```
 
-Plus root: `index.html`, `vite.config.ts` (COOP/COEP headers), `package.json`, `tsconfig.json`, `tailwind.config.ts`.
+Plus root: `index.html`, `vite.config.ts` (COOP/COEP headers + ortRuntime plugin serving `/ort/*`), `package.json`, `tsconfig.json`, `tailwind.config.ts`.
 
 ## Critical gotchas (do not relearn)
 
@@ -162,6 +170,9 @@ Plus root: `index.html`, `vite.config.ts` (COOP/COEP headers), `package.json`, `
 - **`return_timestamps: 'word'` is required** for LocalAgreement-2. Whisper words without timestamps are dropped (their position is unreliable).
 - **Use `_timestamped` model variants only.** The default `onnx-community/whisper-*` ONNX exports do not include cross-attention outputs, and `return_timestamps: 'word'` throws `Model outputs must contain cross attentions to extract timestamps`.
 - **Batch worker uses `sessionId` to ignore late results.** If the user clicks Record while a batch transcribe is in flight, the new session ID makes the eventual response a no-op.
+- **VAD is the primary silence gate; RMS is the fallback only.** `collectAudioFrom` returns `speechProbability: undefined` for any window containing a chunk without a VAD verdict, forcing the consumer onto RMS. Do not "improve" this by max'ing over the verdicted subset; it silently drops real speech in the unverdicted chunks.
+- **VAD load is fire-and-forget, recording must never block on it.** Init failure is allowed; the producer logs once per session and chunks ship with `speechProbability: undefined`.
+- **ORT runtime is served by Vite from `node_modules`, never from `public/`.** Files in `public/` cannot be dynamically `import()`-ed; ORT's threaded loader uses `import()`. See `vite.config.ts::ortRuntime` and `src/lib/vad/silero/sileroVad.ts` (`ort.env.wasm.wasmPaths = '/ort/'`).
 
 ## Verification
 

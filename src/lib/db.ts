@@ -7,6 +7,15 @@ export interface AudioChunk {
   id?: number;
   startedAt: number;
   samples: Float32Array;
+  /**
+   * Maximum Silero v5 speech probability across the ~31 VAD frames in this
+   * 1-second chunk, in `[0, 1]`. `undefined` when VAD was not yet loaded at
+   * write time (allowed for the first half-second of a session). The
+   * consumer uses this to decide whether to skip Whisper.
+   *
+   * Added in Dexie schema v4. Not indexed.
+   */
+  speechProbability?: number;
 }
 
 export interface TranscriptToken {
@@ -32,6 +41,17 @@ class LiveDB extends Dexie {
       transcript: 'tokenId, t, isFinal',
     });
     this.version(3).stores({
+      chunks: '++id, startedAt',
+      transcript: 'tokenId, t, isFinal',
+      audioArchive: '++id, startedAt',
+    });
+    // v4 adds the optional `speechProbability` field on `AudioChunk` rows
+    // (both `chunks` and `audioArchive` share the shape). The field is NOT
+    // indexed; only `startedAt` is. The store schema strings stay the same,
+    // so this is a no-op migration as far as Dexie is concerned. We still
+    // bump the version so existing browsers re-open the DB cleanly and the
+    // intent is recorded in source.
+    this.version(4).stores({
       chunks: '++id, startedAt',
       transcript: 'tokenId, t, isFinal',
       audioArchive: '++id, startedAt',

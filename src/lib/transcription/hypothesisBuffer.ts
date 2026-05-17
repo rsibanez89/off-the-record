@@ -64,12 +64,21 @@ export class HypothesisBuffer {
    * 5-gram tail overlap dedup. If the head of `words` repeats the tail of the
    * committed transcript (Whisper does this when fed overlapping audio), strip
    * the overlap from `words`. Greedy: longest overlap up to 5 wins.
+   *
+   * Skip dedup only when the new hypothesis is clearly past the committed
+   * boundary by enough that overlap is impossible. We use the candidate's
+   * END time, not START, because a word that overlaps committed has end at
+   * or after lastCommittedTime even if its start is far before. The previous
+   * check `Math.abs(words[0].start - lastCommittedTime) >= 1` would fire
+   * exactly when a roughly-1-second word fully overlapped committed (gap was
+   * exactly its duration), letting the re-emission slip through as a
+   * duplicate. Boundary words and the drain loop both made this visible.
    */
   private stripCommittedTailOverlap(words: TimedWord[]): TimedWord[] {
     if (words.length === 0 || this.committed.length === 0) return words;
-    // Only attempt dedup near the committed boundary. Otherwise we risk
-    // chopping unrelated words that happen to repeat far from the seam.
-    if (Math.abs(words[0].start - this.lastCommittedTime) >= 1) return words;
+    // Words that clearly start past the committed boundary cannot be
+    // re-emissions of committed material; skip the comparison.
+    if (words[0].start > this.lastCommittedTime + 1) return words;
 
     const maxK = Math.min(this.committed.length, words.length, 5);
     for (let k = maxK; k >= 1; k--) {

@@ -1,0 +1,4 @@
+# Silero VAD weights are fetched by scripts/fetch-models.mjs (run via
+# `npm run predev` / `npm run prebuild`). Do not commit them: the script
+# verifies a pinned SHA-256, which is the source of truth.
+*.onnx
