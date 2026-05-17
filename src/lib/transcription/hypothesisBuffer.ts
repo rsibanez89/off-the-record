@@ -30,13 +30,30 @@ function norm(s: string): string {
   return out;
 }
 
+interface TentativeEntry {
+  word: TimedWord;
+  /**
+   * Number of consecutive hypotheses in which this exact word has appeared
+   * at this position. Starts at 1 the first time the word is seen. A word
+   * commits when `confirms` reaches `agreementOrder` (LA-n threshold).
+   */
+  confirms: number;
+}
+
 export class HypothesisBuffer {
   private committed: TimedWord[] = [];
-  // `tentative` holds the surviving tail of the previous iteration's `new`.
-  // The next iteration's `new` is compared against it position-wise to decide
-  // what graduates to `committed`.
-  private tentative: TimedWord[] = [];
+  // `tentative` holds the surviving tail of recent hypotheses. Each entry
+  // carries a confirm counter so we can generalise from LA-2 (commit at 2
+  // matches) to LA-n. The order of entries mirrors LA-2 semantics: a fresh
+  // hypothesis is compared position-wise against this list to decide what
+  // graduates to `committed`.
+  private tentative: TentativeEntry[] = [];
   private lastCommittedTime = 0;
+  private readonly agreementOrder: number;
+
+  constructor(options?: { agreementOrder?: number }) {
+    this.agreementOrder = options?.agreementOrder ?? 2;
+  }
 
   /**
    * Feed a fresh hypothesis from Whisper and run one round of LocalAgreement-2.
@@ -143,27 +160,61 @@ export class HypothesisBuffer {
   }
 
   /**
-   * Core LocalAgreement-2 step. Walk `current` and `tentative` in parallel,
-   * committing each word that matches. Stop at the first mismatch. The
-   * surviving tail of `current` becomes the new `tentative` for next round.
+   * Core LocalAgreement-n step. Walk `current` and `tentative` in parallel,
+   * incrementing each matched position's confirm count. A word graduates
+   * to `committed` when its confirms reach `agreementOrder` (n).
    *
-   * Empty `current` is treated as a no-op: when an upstream step (drop,
-   * dedup, prompt-regurgitation strip) consumes every word, the tick
-   * conveys no new information, and clobbering `tentative` with `[]` would
-   * silently throw away a real pending word from the previous tick.
+   * For n=2 this reproduces the LA-2 reference behaviour: the first match
+   * lands at confirms=2 and commits immediately. For n=3 a word must
+   * appear at the same position in three consecutive hypotheses.
+   *
+   * Empty `current` is a no-op: when an upstream step consumes every word
+   * the tick conveys no information and clobbering `tentative` would
+   * silently throw away a real pending word.
    */
   private runLocalAgreement(current: TimedWord[]): TimedWord[] {
     if (current.length === 0) return [];
+
+    // 1. Position-wise match prefix between current and tentative.
+    let matchLen = 0;
+    while (matchLen < current.length && matchLen < this.tentative.length) {
+      if (norm(current[matchLen].text) !== norm(this.tentative[matchLen].word.text)) break;
+      matchLen++;
+    }
+
+    // 2. Increment confirm counters along the match prefix.
+    for (let i = 0; i < matchLen; i++) {
+      this.tentative[i].confirms++;
+    }
+
+    // 3. Promote the longest prefix that has reached the threshold.
+    let commitLen = 0;
+    while (
+      commitLen < this.tentative.length &&
+      this.tentative[commitLen].confirms >= this.agreementOrder
+    ) {
+      commitLen++;
+    }
+
+    // Commit using the CURRENT hypothesis's text and timestamps: it is the
+    // freshest read of the audio and matches the LA-2 reference behaviour
+    // (which captured the new word, not the stored stale one). `commitLen
+    // <= matchLen` by construction so `current[i]` is always in range.
     const justCommitted: TimedWord[] = [];
-    let i = 0;
-    while (i < current.length && i < this.tentative.length) {
-      if (norm(current[i].text) !== norm(this.tentative[i].text)) break;
-      justCommitted.push(current[i]);
-      this.lastCommittedTime = current[i].end;
-      i++;
+    for (let i = 0; i < commitLen; i++) {
+      const w = current[i];
+      justCommitted.push(w);
+      this.lastCommittedTime = w.end;
     }
     this.committed.push(...justCommitted);
-    this.tentative = current.slice(i);
+
+    // 4. The new tentative is:
+    //    - the matched-but-not-yet-threshold middle section (keeps its
+    //      confirm counts so a later tick can reach the threshold)
+    //    - plus the divergent tail of current, fresh (confirms=1).
+    const pending = this.tentative.slice(commitLen, matchLen);
+    const fresh: TentativeEntry[] = current.slice(matchLen).map((word) => ({ word, confirms: 1 }));
+    this.tentative = [...pending, ...fresh];
     return justCommitted;
   }
 
@@ -174,11 +225,11 @@ export class HypothesisBuffer {
    */
   forceCommit(): TimedWord[] {
     if (this.tentative.length === 0) return [];
-    const committed = this.tentative;
-    this.lastCommittedTime = committed[committed.length - 1].end;
-    this.committed.push(...committed);
+    const promoted = this.tentative.map((e) => e.word);
+    this.lastCommittedTime = promoted[promoted.length - 1].end;
+    this.committed.push(...promoted);
     this.tentative = [];
-    return committed;
+    return promoted;
   }
 
   getCommitted(): readonly TimedWord[] {
@@ -186,7 +237,7 @@ export class HypothesisBuffer {
   }
 
   getTentative(): readonly TimedWord[] {
-    return this.tentative;
+    return this.tentative.map((e) => e.word);
   }
 
   getLastCommittedTime(): number {
