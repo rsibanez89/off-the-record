@@ -12,7 +12,7 @@
 //   Dependency Inversion: workers depend on this class, not on
 //     transformers.js or ORT directly.
 
-import type { ModelId } from '../audio';
+import { isMoonshine, type ModelId } from '../audio';
 import {
   createPipeline,
   detectBackend,
@@ -37,9 +37,20 @@ export class WhisperEngine {
    * Detect the runtime backend, instantiate the pipeline, and hold it ready
    * for `run` and `getPipeline`. Idempotent: a second call replaces the
    * pipeline (used by the consumer worker on model switch).
+   *
+   * Moonshine override: even when WebGPU is available, we force the WASM
+   * backend for Moonshine specifically. Empirical evidence (a user
+   * recording of clean 9 s English mic audio) showed Moonshine on WebGPU
+   * + q8 producing multilingual gibberish, while the same model on Node
+   * CPU correctly transcribed every fixture in the matrix (synth 5 s,
+   * jfk 11 s, apollo11 25 s). The strongest hypothesis is a WebGPU + q8
+   * precision issue in transformers.js / ORT-web. WASM gives correct
+   * output at the cost of speed; until upstream fixes WebGPU q8 for
+   * Moonshine, the override is the safe default.
    */
   async load(onProgress: (p: ProgressEntry) => void): Promise<void> {
-    this.backend = await detectBackend();
+    const detected = await detectBackend();
+    this.backend = isMoonshine(this.modelId) ? 'wasm' : detected;
     this.pipelinePromise = createPipeline(this.modelId, this.backend, onProgress);
     await this.pipelinePromise;
   }
