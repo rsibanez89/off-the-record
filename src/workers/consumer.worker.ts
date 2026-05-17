@@ -2,12 +2,7 @@
 import { db, type TranscriptToken } from '../lib/db';
 import { DEFAULT_MODEL, type ModelId } from '../lib/audio';
 import { HypothesisBuffer } from '../lib/transcription/hypothesisBuffer';
-import {
-  createPipeline,
-  detectBackend,
-  type Backend,
-  type WhisperPipeline,
-} from '../lib/transcription/whisperAdapter';
+import { WhisperEngine } from '../lib/transcription/whisperEngine';
 import {
   LiveTranscriptionLoop,
   type TickKind,
@@ -63,9 +58,8 @@ const audioRepo = new DexieAudioChunkRepository();
 const transcriptRepo = new DexieTranscriptRepository();
 
 let loop: LiveTranscriptionLoop | null = null;
-let pipelinePromise: Promise<WhisperPipeline> | null = null;
+let engine: WhisperEngine | null = null;
 let modelId: ModelId = DEFAULT_MODEL;
-let backend: Backend = 'wasm';
 let processing = false;
 let pendingTick = false;
 let draining = false;
@@ -112,11 +106,11 @@ function applyTickOutcome(outcome: TickOutcome) {
 
 async function init(id: ModelId) {
   modelId = id;
-  backend = await detectBackend();
-  pipelinePromise = createPipeline(modelId, backend, (p) => {
+  engine = new WhisperEngine(modelId);
+  await engine.load((p) => {
     postOut({ type: 'progress', ...p });
   });
-  const pipeline = await pipelinePromise;
+  const pipeline = await engine.getPipeline();
   loop = new LiveTranscriptionLoop({
     pipeline,
     buffer,
@@ -125,7 +119,7 @@ async function init(id: ModelId) {
     modelId,
   });
   await resetState();
-  postOut({ type: 'ready', backend });
+  postOut({ type: 'ready', backend: engine.getBackend() });
   postStats();
   scheduleTick();
 }

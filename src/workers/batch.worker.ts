@@ -1,13 +1,8 @@
 /// <reference lib="webworker" />
 import { db, type TranscriptToken } from '../lib/db';
 import { TARGET_SAMPLE_RATE, DEFAULT_MODEL, isMultilingual, type ModelId } from '../lib/audio';
-import {
-  createPipeline,
-  detectBackend,
-  runWhisper,
-  type Backend,
-  type WhisperPipeline,
-} from '../lib/transcription/whisperAdapter';
+import { type Backend } from '../lib/transcription/whisperAdapter';
+import { WhisperEngine } from '../lib/transcription/whisperEngine';
 
 // One-shot batch transcription worker. Loads its own Whisper pipeline,
 // independent of the live consumer. On `transcribe` it reads the full
@@ -34,9 +29,8 @@ type OutMessage =
 
 declare const self: DedicatedWorkerGlobalScope;
 
-let pipelinePromise: Promise<WhisperPipeline> | null = null;
+let engine: WhisperEngine | null = null;
 let modelId: ModelId = DEFAULT_MODEL;
-let backend: Backend = 'wasm';
 
 function postOut(msg: OutMessage) {
   self.postMessage(msg);
@@ -48,12 +42,11 @@ function log(message: string) {
 
 async function init(id: ModelId) {
   modelId = id;
-  backend = await detectBackend();
-  pipelinePromise = createPipeline(modelId, backend, (p) => {
+  engine = new WhisperEngine(modelId);
+  await engine.load((p) => {
     postOut({ type: 'progress', ...p });
   });
-  await pipelinePromise;
-  postOut({ type: 'ready', backend });
+  postOut({ type: 'ready', backend: engine.getBackend() });
 }
 
 async function loadFullAudio(): Promise<Float32Array | null> {
@@ -70,11 +63,10 @@ async function loadFullAudio(): Promise<Float32Array | null> {
 }
 
 async function transcribe(sessionId: number) {
-  if (!pipelinePromise) {
+  if (!engine) {
     postOut({ type: 'error', message: 'batch pipeline not initialised yet' });
     return;
   }
-  const pipeline = await pipelinePromise;
 
   postOut({ type: 'transcribe-start', sessionId });
   const samples = await loadFullAudio();
@@ -96,7 +88,7 @@ async function transcribe(sessionId: number) {
     // Batch transcribes the full audio in one pass with no preceding context,
     // so we deliberately do NOT pass `initialPrompt`. Live uses it; batch
     // benefits from a clean run without confabulation guards interfering.
-    const result = await runWhisper(pipeline, samples, {
+    const result = await engine.run(samples, {
       language: isMultilingual(modelId) ? 'en' : undefined,
       offsetSeconds: 0,
     });
