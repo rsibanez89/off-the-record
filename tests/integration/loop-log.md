@@ -51,6 +51,14 @@ Append-only. One block per attempt. See `docs/AUTONOMOUS-LOOP.md` for the protoc
 - Reverted: 1 (`dropAlreadyCovered` start-based filter, hard JFK regression).
 - Stopped voluntarily after the regression: the biggest tractable algorithm-side wins are now banked, Apollo 11's residual has no clean single-file remedy per the second sub-agent investigation, and continuing risks burning more wall-time on diminishing returns. The investigative-sub-agent recipe worked beautifully on `long` (5.15); applied again to Apollo 11 (next-iteration entry above), it honestly returned "no clean fix" plus a fix that bench-regressed, which is also a valuable signal.
 
+## 2026-05-17T18:30Z | 5.14 v2: drain witness-only LA-2 mode
+
+- Verdict: regression (hard test failures on synth and jfk; comparator did not run)
+- Action: reverted
+- WER deltas per fixture: n/a (vitest exited non-zero; synth CER 0% -> 17%, jfk CER 1.9% -> ?, streaming penalties blew through thresholds)
+- Notes: Added `ingest(hypothesis, { commitsAllowed: false })` mode and a `dropTentative` finaliser; drain passes `commitsAllowed: false` so re-decoding the same audio cannot self-confirm hallucinations. The hypothesis was right (Apollo 11's mechanism is exactly drain self-agreement) but the implementation was too blunt. The synth and JFK fixtures both rely on drain-side LA-2 to confirm trailing words that production saw only once before stop. With drain commits gated off, those words die at `dropTentative`. Hard regression. Reverted.
+- Next angle: per-word "witness count" on `tentative` that increments only when ingest happens on a NEW audio window (`audio.t1` strictly greater than the previous ingest's). Then drain ticks (same audio) cannot increment the count, so apollo11's first-time-emitted garbage cannot reach the threshold, but production-witnessed words (count >= 1 entering drain) can still LA-2 commit. Requires plumbing `audio.t1` into `ingest` and tracking per-word counts. Larger change, deferred until the rest of the backlog is processed.
+
 ## 2026-05-17T17:51Z | dropAlreadyCovered: filter by START instead of END
 
 - Verdict: regression (hard test failures, comparator did not run)

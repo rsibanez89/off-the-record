@@ -14,25 +14,16 @@ import type { TranscriptToken } from '../db';
 import { HypothesisBuffer, type TimedWord } from './hypothesisBuffer';
 import { isHallucinationLine, isSentenceEnd, isSilent, rms } from './heuristics';
 import { runWhisper, type WhisperPipeline } from './whisperAdapter';
-import { VAD_SILENCE_THRESHOLD } from '../config';
-
-// Window-size policy (see PLAN.md "Live transcription design invariants").
-// `MIN_WINDOW_S = 0` means "run on the first chunk available" so the live
-// panel gives feedback fast; LA-2 revises junk on subsequent ticks.
-const MIN_WINDOW_S = 0;
-const MIN_DRAIN_WINDOW_S = 0;
-const MAX_WINDOW_S = 24.0;
-// Audio anchor advancement: preserve intra-sentence context for accuracy.
-// Trim only on sentence ends, except force-trim past FAST_TRIM_THRESHOLD_S
-// and force-slide past MAX_WINDOW_S as safety nets.
-const CONTEXT_LOOKBACK_S = 5.0;
-const FAST_TRIM_THRESHOLD_S = 10.0;
-// Drain loop safety: cap ticks at Stop so a misbehaving model cannot stall
-// the flush forever.
-const DRAIN_MAX_ITERATIONS = 20;
-// Prompt length cap (characters as a cheap proxy for Whisper's ~224-token
-// prompt window; the adapter further caps by token count).
-const MAX_PROMPT_CHARS = 800;
+import {
+  CONTEXT_LOOKBACK_S,
+  DRAIN_MAX_ITERATIONS,
+  FAST_TRIM_THRESHOLD_S,
+  MAX_PROMPT_CHARS,
+  MAX_WINDOW_S,
+  MIN_DRAIN_WINDOW_S,
+  MIN_WINDOW_S,
+  VAD_SILENCE_THRESHOLD,
+} from '../config';
 
 export interface CollectedAudio {
   samples: Float32Array;
