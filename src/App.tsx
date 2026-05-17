@@ -81,7 +81,30 @@ export default function App() {
   const batchSessionRef = useRef(0);
 
   const spawnConsumer = useCallback((id: ModelId) => {
-    consumerRef.current?.terminate();
+    // Ask the prior worker to dispose its pipeline before terminating, so
+    // ORT session + weight tensors are released BEFORE the new worker
+    // starts fetching the next model. Without this, a model swap can
+    // race the prior model's GC and the new fetch hits an
+    // `ArrayBuffer allocation failed` error in transformers.js.
+    if (consumerRef.current) {
+      const old = consumerRef.current;
+      const cleanup = () => {
+        try {
+          old.terminate();
+        } catch {
+          // ignore
+        }
+      };
+      // 250 ms timeout fallback so a hung worker cannot block the swap.
+      const fallback = setTimeout(cleanup, 250);
+      old.onmessage = (e: MessageEvent) => {
+        if (e.data?.type === 'disposed') {
+          clearTimeout(fallback);
+          cleanup();
+        }
+      };
+      old.postMessage({ type: 'dispose' });
+    }
     const worker = new Worker(
       new URL('./workers/consumer.worker.ts', import.meta.url),
       { type: 'module' }
@@ -110,7 +133,26 @@ export default function App() {
   }, []);
 
   const spawnBatch = useCallback((id: ModelId) => {
-    batchRef.current?.terminate();
+    // Same dispose-then-terminate dance as spawnConsumer; see that
+    // function for the rationale.
+    if (batchRef.current) {
+      const old = batchRef.current;
+      const cleanup = () => {
+        try {
+          old.terminate();
+        } catch {
+          // ignore
+        }
+      };
+      const fallback = setTimeout(cleanup, 250);
+      old.onmessage = (e: MessageEvent) => {
+        if (e.data?.type === 'disposed') {
+          clearTimeout(fallback);
+          cleanup();
+        }
+      };
+      old.postMessage({ type: 'dispose' });
+    }
     const worker = new Worker(
       new URL('./workers/batch.worker.ts', import.meta.url),
       { type: 'module' }

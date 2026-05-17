@@ -81,12 +81,29 @@ export class WhisperEngine {
   }
 
   /**
-   * Drop the pipeline reference. Future variants can call the pipeline's
-   * dispose hook here when WebGPU memory pressure requires periodic
-   * reload (transformers.js issue #860). For now this is a hook for the
-   * worker to release memory at session boundaries.
+   * Release the underlying ORT session and tensor memory deterministically,
+   * then drop the pipeline reference. transformers.js v3 exposes
+   * `pipeline.model.dispose()` for WebGPU/WASM cleanup; calling it here
+   * gives the GC a head start on releasing the weight buffers (typically
+   * 100s of MB) before the next model fetch starts. Without this, a
+   * model swap can race the prior model's GC and an `ArrayBuffer
+   * allocation failed` error fires on the new fetch.
+   *
+   * Best-effort: any error during dispose is swallowed because the caller
+   * is about to terminate the worker anyway.
    */
   async dispose(): Promise<void> {
+    if (this.pipelinePromise) {
+      try {
+        const pipeline = await this.pipelinePromise;
+        const model = (pipeline as unknown as { model?: { dispose?: () => Promise<void> } }).model;
+        if (model && typeof model.dispose === 'function') {
+          await model.dispose();
+        }
+      } catch {
+        // ignore: caller is about to terminate the worker.
+      }
+    }
     this.pipelinePromise = null;
   }
 }

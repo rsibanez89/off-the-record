@@ -19,13 +19,15 @@ import { DexieAudioArchiveRepository } from '../lib/repositories/dexieRepositori
 
 type InMessage =
   | { type: 'init'; modelId: ModelId }
-  | { type: 'transcribe'; sessionId: number };
+  | { type: 'transcribe'; sessionId: number }
+  | { type: 'dispose' };
 
 type OutMessage =
   | { type: 'ready'; backend: Backend }
   | { type: 'progress'; file: string; loaded: number; total: number; status: string }
   | { type: 'error'; message: string }
   | { type: 'transcribe-start'; sessionId: number }
+  | { type: 'disposed' }
   | {
       type: 'transcribe-done';
       sessionId: number;
@@ -121,6 +123,18 @@ self.onmessage = async (e: MessageEvent<InMessage>) => {
   }
   if (msg.type === 'transcribe') {
     await transcribe(msg.sessionId);
+    return;
+  }
+  if (msg.type === 'dispose') {
+    try {
+      if (engine) {
+        await engine.dispose();
+        engine = null;
+      }
+    } catch (err) {
+      console.warn(`[batch] dispose error (ignored): ${(err as Error).message}`);
+    }
+    postOut({ type: 'disposed' });
     return;
   }
 };

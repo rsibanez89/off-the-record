@@ -32,7 +32,8 @@ type LiveLoop = LiveTranscriptionLoop | NativeStreamingLoop;
 type InMessage =
   | { type: 'init'; modelId: ModelId }
   | { type: 'reset' }
-  | { type: 'flush' };
+  | { type: 'flush' }
+  | { type: 'dispose' };
 
 // Outbound message union, split by category. The runtime emits exactly the
 // same wire shapes as before; this split exists so the main thread can
@@ -45,7 +46,8 @@ type InMessage =
 type ConsumerLifecycleMessage =
   | { type: 'ready'; backend: 'webgpu' | 'wasm' }
   | { type: 'reset-done' }
-  | { type: 'flush-done' };
+  | { type: 'flush-done' }
+  | { type: 'disposed' };
 
 /** Model loading progress and unrecoverable errors. */
 type ConsumerProgressMessage =
@@ -273,5 +275,29 @@ self.onmessage = async (e: MessageEvent<InMessage>) => {
       draining = false;
       postStats();
     }
+    return;
+  }
+  if (msg.type === 'dispose') {
+    // Release the underlying ORT session + weight tensors before the
+    // main thread terminates us. Without this, a model swap can race
+    // the prior model's garbage collection and the new model's fetch
+    // hits an `ArrayBuffer allocation failed` error.
+    try {
+      if (tickTimer !== null) {
+        clearTimeout(tickTimer);
+        tickTimer = null;
+      }
+      pendingTick = false;
+      if (engine) {
+        await engine.dispose();
+        engine = null;
+      }
+      loop = null;
+    } catch (err) {
+      // Best effort; the worker is about to be terminated anyway.
+      console.warn(`[consumer] dispose error (ignored): ${(err as Error).message}`);
+    }
+    postOut({ type: 'disposed' });
+    return;
   }
 };
