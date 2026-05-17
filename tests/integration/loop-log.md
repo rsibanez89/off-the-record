@@ -51,6 +51,32 @@ Append-only. One block per attempt. See `docs/AUTONOMOUS-LOOP.md` for the protoc
 - Reverted: 1 (`dropAlreadyCovered` start-based filter, hard JFK regression).
 - Stopped voluntarily after the regression: the biggest tractable algorithm-side wins are now banked, Apollo 11's residual has no clean single-file remedy per the second sub-agent investigation, and continuing risks burning more wall-time on diminishing returns. The investigative-sub-agent recipe worked beautifully on `long` (5.15); applied again to Apollo 11 (next-iteration entry above), it honestly returned "no clean fix" plus a fix that bench-regressed, which is also a valuable signal.
 
+## Session summary (run 3, ended 19:20Z)
+
+Goal: test every remaining item in `improvements.md`. Result:
+
+Shipped 6 bench-neutral structural improvements (all SOLID refactors, integration tests pass, bench neutral, kept by structural-improvement rule):
+
+- 2.7 config centralisation (commit f038e4b)
+- 2.5 WhisperEngine class (commit 39aae82)
+- 2.1 anchor advancement strategy module (commit 5aa3a3d)
+- 2.2 producer/batch repositories (commit 4dcdd30)
+- 2.8 audio-worklet sample-rate adaptivity (commit 9ee1981)
+- 3.5 writeTranscript diff-only (commit 04486c3)
+- 5.3 LocalAgreement-n configurability (commit 1066492; n=2 default kept, n=3 sweep regressed Apollo 11 streaming penalty so reverted to n=2)
+
+Reverted 1: 5.14 v2 drain witness-only LA-2 mode (entry below).
+
+Discarded with documented reason in `improvements.md` Status lines (bench-invisible, WebGPU-only, research, upstream-blocked, or UX/feature requiring human review):
+
+  Section 1 (model picker): 1.1, 1.2, 1.3, 1.4, 1.5, 1.7
+  Section 2 (architecture): 2.6 (the one structural refactor that purely changes worker -> main-thread types; bench cannot see it)
+  Section 3 (memory): 3.1, 3.2, 3.4, 3.6, 3.7
+  Section 4 (testability): 4.6, 4.8, 4.10
+  Section 5 (algorithm): 5.2, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11
+
+Flagged for human input: 5.12 (long-form chunking for batch worker). A successful 5.12 improves only the offline WER, which makes the bench's `streamingPenaltyPp` rise mechanically and triggers the regression rule even though the change is a real product improvement. The user has to choose between (a) deferring 5.12 to a deliberate batch-quality pass, or (b) updating `scripts/bench-compare.mjs` to gate on `werOfflineVsGt` regression instead.
+
 ## 2026-05-17T18:30Z | 5.14 v2: drain witness-only LA-2 mode
 
 - Verdict: regression (hard test failures on synth and jfk; comparator did not run)
