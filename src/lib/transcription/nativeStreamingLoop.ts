@@ -30,7 +30,7 @@ import type { TranscriptToken } from '../db';
 import type { TimedWord } from './hypothesisBuffer';
 import { isHallucinationLine, isSilent, rms } from './heuristics';
 import { runWhisper, type WhisperPipeline } from './whisperAdapter';
-import { NATIVE_STREAMING_WINDOW_S, VAD_SILENCE_THRESHOLD } from '../config';
+import { MAX_PROMPT_CHARS, NATIVE_STREAMING_WINDOW_S, VAD_SILENCE_THRESHOLD } from '../config';
 import type {
   AudioChunkRepository,
   TickKind,
@@ -122,6 +122,16 @@ export class NativeStreamingLoop {
         language: isMultilingual(modelId) ? 'en' : undefined,
         offsetSeconds: audio.t0,
         requestWordTimestamps: supportsWordTimestamps(modelId),
+        // Feed the committed tail as decoder context. Without this each
+        // 2 s window is decoded from scratch with no preceding context,
+        // which on small models (Moonshine 61M) produces fragmented
+        // hallucinated output. The same trick LA-2 uses; the prompt-
+        // regurgitation strip in `runWhisper` cleans up the case where
+        // the decoder echoes the prompt at the head of its output.
+        // Soft-failure: if the pipeline's tokenizer is missing or its
+        // encode shape differs, `encodePromptIds` returns [] and the
+        // prompt is silently skipped.
+        initialPrompt: this.buildInitialPrompt(),
       });
     } catch (err) {
       return {
@@ -197,5 +207,26 @@ export class NativeStreamingLoop {
     if (toS <= this.committedAudioStartS) return;
     this.committedAudioStartS = toS;
     await this.deps.audioRepo.deleteBefore(toS);
+  }
+
+  /**
+   * Build a Whisper-style initial prompt from the committed tail. Walks
+   * backwards from the most-recent word until either the buffer is empty
+   * or the next addition would exceed `MAX_PROMPT_CHARS` (the adapter's
+   * tokenizer further caps by token count). Same shape as
+   * `LiveTranscriptionLoop.buildInitialPrompt`; could be hoisted into a
+   * shared helper once a third caller appears.
+   */
+  private buildInitialPrompt(): string | undefined {
+    if (this.committed.length === 0) return undefined;
+    let text = '';
+    for (let i = this.committed.length - 1; i >= 0; i--) {
+      const sep = text ? ' ' : '';
+      const next = this.committed[i].text + sep + text;
+      if (next.length > MAX_PROMPT_CHARS) break;
+      text = next;
+    }
+    const trimmed = text.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
   }
 }

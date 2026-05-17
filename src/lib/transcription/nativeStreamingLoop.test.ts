@@ -67,13 +67,19 @@ function scriptedPipeline(
   }>,
 ) {
   let idx = 0;
-  const call = vi.fn(async () => {
+  const calls: { samples: Float32Array; opts: Record<string, unknown> }[] = [];
+  const call = vi.fn(async (samples: Float32Array, opts: Record<string, unknown>) => {
+    calls.push({ samples, opts });
     if (idx < results.length) return results[idx++];
     return { text: '', chunks: [] };
   });
   const pipeline = call as unknown as WhisperPipeline;
-  pipeline.tokenizer = { encode: () => [] };
-  return { pipeline };
+  // Tokenizer that pretends to encode whatever text it gets. Lets the
+  // adapter's prompt-ids path run end to end in tests.
+  pipeline.tokenizer = {
+    encode: (text: string) => text.split(/\s+/).filter((s) => s.length > 0).map((_, i) => i + 1),
+  };
+  return { pipeline, calls };
 }
 
 const SECOND_OF_SILENCE = new Float32Array(16_000);
@@ -201,6 +207,37 @@ describe('NativeStreamingLoop', () => {
     expect(rows.map((r) => r.text)).toEqual(['done']);
     expect(audioRepo.chunks).toEqual([]);
     expect(loop.getCommittedAudioStartS()).toBe(0);
+  });
+
+  it('passes the committed tail as initialPrompt on subsequent ticks', async () => {
+    const audioRepo = new FakeAudioRepo();
+    const transcriptRepo = new FakeTranscriptRepo();
+    audioRepo.push({ startedAt: 0, samples: secondOfSpeech(), speechProbability: 0.9 });
+    audioRepo.push({ startedAt: 1, samples: secondOfSpeech(), speechProbability: 0.9 });
+    const { pipeline, calls } = scriptedPipeline([
+      {
+        text: ' alpha beta',
+        chunks: [
+          { text: ' alpha', timestamp: [0, 0.4] },
+          { text: ' beta', timestamp: [0.4, 1.0] },
+        ],
+      },
+      { text: ' gamma', chunks: [{ text: ' gamma', timestamp: [0, 0.5] }] },
+    ]);
+    const loop = new NativeStreamingLoop({ pipeline, audioRepo, transcriptRepo, modelId: MOONSHINE });
+
+    // First tick: no committed history, no prompt.
+    await loop.tick();
+    expect(calls[0].opts.prompt_ids).toBeUndefined();
+    expect(loop.getCommittedWordCount()).toBe(2);
+
+    // Second tick: committed tail "alpha beta" should be passed as prompt.
+    audioRepo.push({ startedAt: 2, samples: secondOfSpeech(), speechProbability: 0.9 });
+    audioRepo.push({ startedAt: 3, samples: secondOfSpeech(), speechProbability: 0.9 });
+    await loop.tick();
+    expect(calls[1].opts.prompt_ids).toBeDefined();
+    expect(Array.isArray(calls[1].opts.prompt_ids)).toBe(true);
+    expect((calls[1].opts.prompt_ids as number[]).length).toBeGreaterThan(0);
   });
 
   it('reset clears committed words and anchor', async () => {
