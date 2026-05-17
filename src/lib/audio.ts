@@ -12,11 +12,14 @@ export const CHUNK_SAMPLES = TARGET_SAMPLE_RATE * CHUNK_DURATION_S;
  */
 export type ModelPanelRole = 'live' | 'batch';
 
-// All entries use the `_timestamped` ONNX exports. Those export the cross-
-// attention outputs that transformers.js needs to compute word-level
-// timestamps via DTW. The non-timestamped variants throw "Model outputs must
-// contain cross attentions to extract timestamps" when fed `return_timestamps:
-// 'word'`, which our LocalAgreement-2 implementation requires.
+// Whisper entries use the `_timestamped` ONNX exports because LA-2 needs
+// per-word timestamps via DTW from cross-attention outputs. Models flagged
+// `supportsWordTimestamps: false` are hidden from the live panel (LA-2
+// requires word timing) and only offered in the batch panel for
+// comparison: distil and moonshine fall in this bucket, distil because
+// the upstream `distil-whisper/distil-large-v3.5-ONNX` export does not
+// document cross-attention surfacing, moonshine because the transformers.js
+// pipeline only emits text-level output for it.
 //
 // Labels are panel-aware on purpose: a "best, multilingual" tag on the live
 // panel was misleading and pushed users onto turbo for live, where it
@@ -26,16 +29,25 @@ export const MODELS = [
     id: 'onnx-community/whisper-tiny.en_timestamped',
     liveLabel: 'tiny.en (fastest, low hallucination, English)',
     batchLabel: 'tiny.en (fastest, English)',
+    supportsWordTimestamps: true,
   },
   {
-    id: 'onnx-community/whisper-base.en_timestamped',
-    liveLabel: 'base.en (recommended for live, English)',
-    batchLabel: 'base.en (English)',
+    id: 'distil-whisper/distil-large-v3.5-ONNX',
+    liveLabel: 'distil-large-v3.5 (batch-only, not yet live-capable)',
+    batchLabel: 'distil-large-v3.5 (HF/distil, ~500 MB, beats turbo on OOD WER)',
+    supportsWordTimestamps: false,
+  },
+  {
+    id: 'onnx-community/moonshine-base-ONNX',
+    liveLabel: 'moonshine-base (batch-only, streaming architecture, no word timestamps)',
+    batchLabel: 'moonshine-base (UsefulSensors, ~120 MB, native streaming encoder)',
+    supportsWordTimestamps: false,
   },
   {
     id: 'onnx-community/whisper-large-v3-turbo_timestamped',
     liveLabel: 'large-v3-turbo (multilingual, may hallucinate on short windows)',
     batchLabel: 'large-v3-turbo (recommended for batch, multilingual)',
+    supportsWordTimestamps: true,
   },
 ] as const;
 
@@ -47,14 +59,23 @@ export function modelLabel(id: ModelId, role: ModelPanelRole): string {
   return role === 'live' ? m.liveLabel : m.batchLabel;
 }
 
+/**
+ * Filter the picker by panel role. Live hides models that lack word-level
+ * timestamp support (LA-2 needs them); batch shows everything.
+ */
+export function modelsForRole(role: ModelPanelRole): typeof MODELS[number][] {
+  if (role === 'batch') return MODELS.slice();
+  return MODELS.filter((m) => m.supportsWordTimestamps);
+}
+
 /** Default model when the user has no localStorage preference yet. */
-export const DEFAULT_MODEL: ModelId = 'onnx-community/whisper-base.en_timestamped';
+export const DEFAULT_MODEL: ModelId = 'onnx-community/whisper-tiny.en_timestamped';
 /**
  * Per-panel first-run defaults. Live prefers the smaller English model to
  * keep LocalAgreement-2 settling fast and to suppress turbo's confabulation
  * on isolated short windows; batch prefers turbo for raw accuracy.
  */
-export const DEFAULT_LIVE_MODEL: ModelId = 'onnx-community/whisper-base.en_timestamped';
+export const DEFAULT_LIVE_MODEL: ModelId = 'onnx-community/whisper-tiny.en_timestamped';
 export const DEFAULT_BATCH_MODEL: ModelId = 'onnx-community/whisper-large-v3-turbo_timestamped';
 
 export function isValidModel(id: string | null): id is ModelId {
@@ -63,8 +84,8 @@ export function isValidModel(id: string | null): id is ModelId {
 
 /**
  * `.en` variants are English-only and don't carry language/task tokens, so
- * passing them throws in transformers.js. Multilingual checkpoints (only
- * large-v3-turbo in our picker) need explicit language/task.
+ * passing them throws in transformers.js. Multilingual checkpoints (turbo,
+ * distil-large-v3.5, moonshine) need explicit language/task.
  */
 export function isMultilingual(id: ModelId): boolean {
   // Strip the `_timestamped` suffix when checking, otherwise every model
@@ -74,4 +95,24 @@ export function isMultilingual(id: ModelId): boolean {
 
 export function isTurbo(id: ModelId): boolean {
   return id.startsWith('onnx-community/whisper-large-v3-turbo');
+}
+
+/**
+ * Distil-Whisper checkpoints keep the full Whisper encoder, so fp16 on
+ * WebGPU is not always safe. Use fp32 encoder, q4 decoder (same recipe as
+ * non-turbo Whisper checkpoints).
+ */
+export function isDistil(id: ModelId): boolean {
+  return id.startsWith('distil-whisper/');
+}
+
+/**
+ * Moonshine v2 has a different pipeline shape than Whisper (sliding-window
+ * encoder, no 30s padding) and the transformers.js pipeline currently emits
+ * text-only output. Surface this so dtype branching and adapter logic can
+ * special-case it. Marked batch-only above until word-level timestamps land
+ * upstream.
+ */
+export function isMoonshine(id: ModelId): boolean {
+  return id.startsWith('onnx-community/moonshine');
 }

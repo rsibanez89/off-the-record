@@ -7,7 +7,7 @@
 
 import type { TimedWord } from './hypothesisBuffer';
 import { isHallucinationWord } from './heuristics';
-import { isTurbo, type ModelId } from '../audio';
+import { isMoonshine, isTurbo, type ModelId } from '../audio';
 
 export type Backend = 'webgpu' | 'wasm';
 
@@ -64,15 +64,24 @@ export async function createPipeline(
   } catch {
     // Older transformers.js versions may not expose this; safe to ignore.
   }
-  // Encoder dtype: fp32 is the default-quality baseline. Only large-v3-turbo
-  // ships a published fp16 encoder; smaller checkpoints either do not export
-  // fp16 or measurably degrade accuracy on noisy/accented speech.
-  // Decoder stays q4: that's where the speed win is.
+  // Encoder dtype:
+  //   - Turbo on WebGPU has a published fp16 encoder; we use it for speed.
+  //   - All other Whisper-family checkpoints (tiny.en, distil) stay fp32
+  //     for accuracy; their fp16 exports either do not exist or measurably
+  //     degrade noisy/accented speech.
+  //   - Moonshine ships pre-quantized encoder+decoder files (q8). fp32 here
+  //     would 404 because the matching files are not published.
+  // Decoder stays q4 across Whisper-family models for the speed win.
   const turbo = isTurbo(modelId);
-  const dtype =
-    backend === 'webgpu'
-      ? { encoder_model: turbo ? 'fp16' : 'fp32', decoder_model_merged: 'q4' }
-      : { encoder_model: 'fp32', decoder_model_merged: 'q4' };
+  const moonshine = isMoonshine(modelId);
+  let dtype: Record<string, string>;
+  if (moonshine) {
+    dtype = { encoder_model: 'q8', decoder_model_merged: 'q8' };
+  } else if (backend === 'webgpu') {
+    dtype = { encoder_model: turbo ? 'fp16' : 'fp32', decoder_model_merged: 'q4' };
+  } else {
+    dtype = { encoder_model: 'fp32', decoder_model_merged: 'q4' };
+  }
   const pipeline = await transformers.pipeline(
     'automatic-speech-recognition',
     modelId,
