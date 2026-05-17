@@ -224,4 +224,54 @@ describe('HypothesisBuffer', () => {
     expect(buf.getCommitted().map((w) => w.text)).toEqual(['hello', 'world']);
     expect(buf.getTentative()).toEqual([]);
   });
+
+  it('monotonic stability: every committed word survives any subsequent ingest', () => {
+    // Once LA-2 promotes a word from tentative to committed it must never
+    // flicker back. The user perceives this as committed text being stable.
+    // Regressing this invariant would re-introduce the "black text re-edits
+    // itself" bug class.
+    const buf = new HypothesisBuffer();
+
+    // Tick 1: nothing committed yet.
+    buf.ingest([word('hello', 0, 0.5), word('world', 0.5, 1)]);
+    expect(buf.getCommitted()).toEqual([]);
+
+    // Tick 2: confirms "hello world" and extends with a new tentative tail.
+    buf.ingest([
+      word('hello', 0, 0.5),
+      word('world', 0.5, 1),
+      word('today', 1, 1.5),
+    ]);
+    const afterTick2 = buf.getCommitted().map((w) => w.text);
+    expect(afterTick2).toEqual(['hello', 'world']);
+
+    // Tick 3: Whisper revises the tail (says "tomorrow" instead of "today"),
+    // adds new content. The committed prefix MUST be untouched even though
+    // the tentative content disagrees.
+    buf.ingest([
+      word('hello', 0, 0.5),
+      word('world', 0.5, 1),
+      word('tomorrow', 1, 1.5),
+      word('then', 1.5, 1.8),
+    ]);
+    const afterTick3 = buf.getCommitted().map((w) => w.text);
+    expect(afterTick3.slice(0, afterTick2.length)).toEqual(afterTick2);
+
+    // Tick 4: another revision; previous committed prefix still preserved.
+    buf.ingest([
+      word('hello', 0, 0.5),
+      word('world', 0.5, 1),
+      word('tomorrow', 1, 1.5),
+      word('then', 1.5, 1.8),
+      word('again', 1.8, 2.1),
+    ]);
+    const afterTick4 = buf.getCommitted().map((w) => w.text);
+    expect(afterTick4.slice(0, afterTick3.length)).toEqual(afterTick3);
+
+    // Tick 5: simulate an upstream collapse (empty hypothesis). Committed
+    // prefix still untouched.
+    buf.ingest([]);
+    const afterTick5 = buf.getCommitted().map((w) => w.text);
+    expect(afterTick5).toEqual(afterTick4);
+  });
 });

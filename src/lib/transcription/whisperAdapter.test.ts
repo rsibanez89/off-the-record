@@ -158,3 +158,107 @@ describe('runWhisper', () => {
     expect(callOpts.prompt_ids).toBeUndefined();
   });
 });
+
+describe('parseResult (via runWhisper)', () => {
+  it('unwraps an array-shaped pipeline result by taking the first element', async () => {
+    // transformers.js sometimes returns the run result as a one-element array.
+    const { pipeline } = mockPipeline([
+      {
+        text: ' a b',
+        chunks: [
+          { text: ' a', timestamp: [0, 0.2] },
+          { text: ' b', timestamp: [0.2, 0.4] },
+        ],
+      },
+    ]);
+    const result = await runWhisper(pipeline, audio, { offsetSeconds: 0 });
+    expect(result.text).toBe(' a b');
+    expect(result.words.map((w) => w.text)).toEqual(['a', 'b']);
+  });
+
+  it('returns empty text and no words for a null pipeline result', async () => {
+    const { pipeline } = mockPipeline(null);
+    const result = await runWhisper(pipeline, audio, { offsetSeconds: 0 });
+    expect(result.text).toBe('');
+    expect(result.words).toEqual([]);
+  });
+
+  it('returns empty words when chunks is missing or empty', async () => {
+    const { pipeline: p1 } = mockPipeline({ text: 'only text, no chunks' });
+    expect((await runWhisper(p1, audio, { offsetSeconds: 0 })).words).toEqual([]);
+
+    const { pipeline: p2 } = mockPipeline({ text: '', chunks: [] });
+    expect((await runWhisper(p2, audio, { offsetSeconds: 0 })).words).toEqual([]);
+  });
+
+  it('drops chunks whose start OR end timestamp is null', async () => {
+    // Whisper emits nulls for word timestamps near window edges. LA-2 cannot
+    // safely commit those words, so the adapter drops them.
+    const { pipeline } = mockPipeline({
+      text: ' a b c d',
+      chunks: [
+        { text: ' a', timestamp: [0, 0.2] }, // kept
+        { text: ' b', timestamp: [null, 0.4] }, // dropped (start null)
+        { text: ' c', timestamp: [0.4, null] }, // dropped (end null)
+        { text: ' d', timestamp: [null, null] }, // dropped (both null)
+      ],
+    });
+    const result = await runWhisper(pipeline, audio, { offsetSeconds: 0 });
+    expect(result.words.map((w) => w.text)).toEqual(['a']);
+  });
+
+  it('drops chunks with empty or whitespace-only text', async () => {
+    const { pipeline } = mockPipeline({
+      text: ' a b',
+      chunks: [
+        { text: ' a', timestamp: [0, 0.2] },
+        { text: '   ', timestamp: [0.2, 0.4] },
+        { text: '', timestamp: [0.4, 0.6] },
+        { text: ' b', timestamp: [0.6, 0.8] },
+      ],
+    });
+    const result = await runWhisper(pipeline, audio, { offsetSeconds: 0 });
+    expect(result.words.map((w) => w.text)).toEqual(['a', 'b']);
+  });
+
+  it('applies isHallucinationWord to drop standalone artefacts', async () => {
+    // ">>" is a common tiny.en hallucination word. Adapter must strip it
+    // before LA-2 sees it (otherwise it pollutes the committed buffer).
+    const { pipeline } = mockPipeline({
+      text: ' >> hello',
+      chunks: [
+        { text: ' >>', timestamp: [0, 0.1] },
+        { text: ' hello', timestamp: [0.1, 0.5] },
+      ],
+    });
+    const result = await runWhisper(pipeline, audio, { offsetSeconds: 0 });
+    expect(result.words.map((w) => w.text)).toEqual(['hello']);
+  });
+
+  it('adds offsetSeconds to every word start and end timestamp', async () => {
+    const { pipeline } = mockPipeline({
+      text: ' a b',
+      chunks: [
+        { text: ' a', timestamp: [0.1, 0.3] },
+        { text: ' b', timestamp: [0.4, 0.6] },
+      ],
+    });
+    const result = await runWhisper(pipeline, audio, { offsetSeconds: 10 });
+    expect(result.words).toEqual([
+      { text: 'a', start: 10.1, end: 10.3 },
+      { text: 'b', start: 10.4, end: 10.6 },
+    ]);
+  });
+
+  it('drops chunks whose timestamp field is missing entirely', async () => {
+    const { pipeline } = mockPipeline({
+      text: ' a b',
+      chunks: [
+        { text: ' a', timestamp: [0, 0.2] },
+        { text: ' b' }, // no `timestamp` at all
+      ],
+    });
+    const result = await runWhisper(pipeline, audio, { offsetSeconds: 0 });
+    expect(result.words.map((w) => w.text)).toEqual(['a']);
+  });
+});

@@ -55,7 +55,6 @@ type OutMessage =
   | { type: 'ready'; backend: 'webgpu' | 'wasm' }
   | { type: 'progress'; file: string; loaded: number; total: number; status: string }
   | { type: 'error'; message: string }
-  | { type: 'log'; message: string }
   | { type: 'display'; tokens: TranscriptToken[] }
   | { type: 'reset-done' }
   | { type: 'flush-done' }
@@ -100,7 +99,6 @@ function postOut(msg: OutMessage) {
 
 function log(message: string) {
   console.log(message);
-  postOut({ type: 'log', message });
 }
 
 function postStats() {

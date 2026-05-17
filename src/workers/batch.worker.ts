@@ -23,7 +23,6 @@ type OutMessage =
   | { type: 'ready'; backend: Backend }
   | { type: 'progress'; file: string; loaded: number; total: number; status: string }
   | { type: 'error'; message: string }
-  | { type: 'log'; message: string }
   | { type: 'transcribe-start'; sessionId: number }
   | {
       type: 'transcribe-done';
@@ -45,7 +44,6 @@ function postOut(msg: OutMessage) {
 
 function log(message: string) {
   console.log(message);
-  postOut({ type: 'log', message });
 }
 
 async function init(id: ModelId) {

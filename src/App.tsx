@@ -96,8 +96,6 @@ export default function App() {
         setLiveProgress((prev) => ({ ...prev, [msg.file]: msg }));
       } else if (msg.type === 'error') {
         setError(msg.message);
-      } else if (msg.type === 'log') {
-        console.log(msg.message);
       } else if (msg.type === 'display') {
         setLiveTokens(msg.tokens);
       } else if (msg.type === 'stats') {
@@ -128,8 +126,6 @@ export default function App() {
       } else if (msg.type === 'error') {
         setError(msg.message);
         setBatchStatus('error');
-      } else if (msg.type === 'log') {
-        console.log(msg.message);
       } else if (msg.type === 'transcribe-start') {
         if (msg.sessionId !== batchSessionRef.current) return;
         setBatchStatus('transcribing');
