@@ -24,30 +24,48 @@ export type ModelPanelRole = 'live' | 'batch';
 // Labels are panel-aware on purpose: a "best, multilingual" tag on the live
 // panel was misleading and pushed users onto turbo for live, where it
 // confabulates story-like prefixes on isolated short windows.
+/**
+ * How the live consumer should drive this model:
+ *   `la2`     - non-streaming model; use LocalAgreement-2 with overlapping
+ *               windows. Requires `supportsWordTimestamps: true`.
+ *   `native`  - natively streaming model; feed fixed 1-second windows and
+ *               commit output directly. No agreement gate, no overlap.
+ *               Word timestamps not required.
+ *   `null`    - not usable in the live panel at all. Batch-only model.
+ *
+ * `modelsForRole('live')` filters on this field: any non-null policy is
+ * live-capable.
+ */
+export type LiveStreamingPolicy = 'la2' | 'native' | null;
+
 export const MODELS = [
   {
     id: 'onnx-community/whisper-tiny.en_timestamped',
-    liveLabel: 'tiny.en (fastest, low hallucination, English)',
+    liveLabel: 'tiny.en (LA-2 simulated streaming, fastest, English)',
     batchLabel: 'tiny.en (fastest, English)',
     supportsWordTimestamps: true,
+    streamingPolicy: 'la2' as LiveStreamingPolicy,
   },
   {
     id: 'distil-whisper/distil-large-v3.5-ONNX',
-    liveLabel: 'distil-large-v3.5 (batch-only, not yet live-capable)',
+    liveLabel: 'distil-large-v3.5 (batch-only)',
     batchLabel: 'distil-large-v3.5 (HF/distil, ~500 MB, beats turbo on OOD WER)',
     supportsWordTimestamps: false,
+    streamingPolicy: null as LiveStreamingPolicy,
   },
   {
     id: 'onnx-community/moonshine-base-ONNX',
-    liveLabel: 'moonshine-base (batch-only, streaming architecture, no word timestamps)',
+    liveLabel: 'moonshine-base (native streaming, ~120 MB)',
     batchLabel: 'moonshine-base (UsefulSensors, ~120 MB, native streaming encoder)',
     supportsWordTimestamps: false,
+    streamingPolicy: 'native' as LiveStreamingPolicy,
   },
   {
     id: 'onnx-community/whisper-large-v3-turbo_timestamped',
-    liveLabel: 'large-v3-turbo (multilingual, may hallucinate on short windows)',
+    liveLabel: 'large-v3-turbo (LA-2 simulated streaming, multilingual, may hallucinate on short windows)',
     batchLabel: 'large-v3-turbo (recommended for batch, multilingual)',
     supportsWordTimestamps: true,
+    streamingPolicy: 'la2' as LiveStreamingPolicy,
   },
 ] as const;
 
@@ -60,12 +78,20 @@ export function modelLabel(id: ModelId, role: ModelPanelRole): string {
 }
 
 /**
- * Filter the picker by panel role. Live hides models that lack word-level
- * timestamp support (LA-2 needs them); batch shows everything.
+ * Filter the picker by panel role. Batch shows everything; live shows any
+ * model with a non-null `streamingPolicy` (either LA-2 for non-streaming
+ * Whisper-family models, or `native` for natively-streaming models like
+ * Moonshine).
  */
 export function modelsForRole(role: ModelPanelRole): typeof MODELS[number][] {
   if (role === 'batch') return MODELS.slice();
-  return MODELS.filter((m) => m.supportsWordTimestamps);
+  return MODELS.filter((m) => m.streamingPolicy !== null);
+}
+
+/** Get the model's live streaming policy. Returns null for batch-only models. */
+export function streamingPolicyFor(id: ModelId): LiveStreamingPolicy {
+  const m = MODELS.find((entry) => entry.id === id);
+  return m?.streamingPolicy ?? null;
 }
 
 /** Default model when the user has no localStorage preference yet. */

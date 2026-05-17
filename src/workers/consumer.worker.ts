@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import { db, type TranscriptToken } from '../lib/db';
-import { DEFAULT_MODEL, type ModelId } from '../lib/audio';
+import { DEFAULT_MODEL, streamingPolicyFor, type ModelId } from '../lib/audio';
 import { HypothesisBuffer } from '../lib/transcription/hypothesisBuffer';
 import { WhisperEngine } from '../lib/transcription/whisperEngine';
 import {
@@ -8,10 +8,16 @@ import {
   type TickKind,
   type TickOutcome,
 } from '../lib/transcription/liveLoop';
+import { NativeStreamingLoop } from '../lib/transcription/nativeStreamingLoop';
 import {
   DexieAudioChunkRepository,
   DexieTranscriptRepository,
 } from '../lib/repositories/dexieRepositories';
+
+// Common live-loop surface that both LA-2 and native streaming implement.
+// Lets the worker hold one variable for either policy and dispatch
+// without conditional logic on every call site.
+type LiveLoop = LiveTranscriptionLoop | NativeStreamingLoop;
 
 // Thin shell around `LiveTranscriptionLoop`. The worker owns:
 //   - Whisper pipeline lifecycle (init, model, backend)
@@ -78,7 +84,7 @@ const buffer = new HypothesisBuffer();
 const audioRepo = new DexieAudioChunkRepository();
 const transcriptRepo = new DexieTranscriptRepository();
 
-let loop: LiveTranscriptionLoop | null = null;
+let loop: LiveLoop | null = null;
 let engine: WhisperEngine | null = null;
 let modelId: ModelId = DEFAULT_MODEL;
 let processing = false;
@@ -132,13 +138,18 @@ async function init(id: ModelId) {
     postOut({ type: 'progress', ...p });
   });
   const pipeline = await engine.getPipeline();
-  loop = new LiveTranscriptionLoop({
-    pipeline,
-    buffer,
-    audioRepo,
-    transcriptRepo,
-    modelId,
-  });
+  // Dispatch to the loop variant that matches the model's streaming
+  // policy. LA-2 models (Whisper-family) use `LiveTranscriptionLoop`
+  // with overlapping windows + agreement gate; native streaming models
+  // (Moonshine) use `NativeStreamingLoop` with fixed non-overlapping
+  // windows. Both implement the same public surface so the rest of the
+  // worker is policy-agnostic.
+  const policy = streamingPolicyFor(modelId);
+  if (policy === 'native') {
+    loop = new NativeStreamingLoop({ pipeline, audioRepo, transcriptRepo, modelId });
+  } else {
+    loop = new LiveTranscriptionLoop({ pipeline, buffer, audioRepo, transcriptRepo, modelId });
+  }
   await resetState();
   postOut({ type: 'ready', backend: engine.getBackend() });
   postStats();
