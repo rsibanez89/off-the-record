@@ -1,0 +1,10 @@
+{
+  "id": "jfk",
+  "source": "https://github.com/openai/whisper/raw/main/tests/jfk.flac",
+  "license": "Public domain (US federal-government work; JFK inaugural address, 1961)",
+  "sampleRateHz": 16000,
+  "channels": 1,
+  "durationS": 11.0,
+  "transcript": "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+  "notes": "Whisper-base.en transcribes this within a couple WER points consistently. Used by openai/whisper, whisper.cpp, faster-whisper. The clip starts after a leading pause."
+}
