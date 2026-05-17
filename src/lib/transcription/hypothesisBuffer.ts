@@ -101,8 +101,14 @@ export class HypothesisBuffer {
    * Core LocalAgreement-2 step. Walk `current` and `tentative` in parallel,
    * committing each word that matches. Stop at the first mismatch. The
    * surviving tail of `current` becomes the new `tentative` for next round.
+   *
+   * Empty `current` is treated as a no-op: when an upstream step (drop,
+   * dedup, prompt-regurgitation strip) consumes every word, the tick
+   * conveys no new information, and clobbering `tentative` with `[]` would
+   * silently throw away a real pending word from the previous tick.
    */
   private runLocalAgreement(current: TimedWord[]): TimedWord[] {
+    if (current.length === 0) return [];
     const justCommitted: TimedWord[] = [];
     let i = 0;
     while (i < current.length && i < this.tentative.length) {

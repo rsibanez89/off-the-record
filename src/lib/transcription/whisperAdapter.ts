@@ -18,6 +18,24 @@ export interface ProgressEntry {
   status: string;
 }
 
+/**
+ * The transformers.js Whisper pipeline is callable AND carries auxiliary
+ * objects (tokenizer, processor, model) as properties. We type both surfaces
+ * so the adapter can tokenize prompts without leaking `any` to call sites.
+ */
+export interface WhisperTokenizer {
+  encode(text: string, options?: { add_special_tokens?: boolean }): number[];
+}
+
+export interface WhisperPipeline {
+  (samples: Float32Array, opts: Record<string, unknown>): Promise<unknown>;
+  tokenizer?: WhisperTokenizer;
+  // Other properties (processor, model) exist but are not used here.
+}
+
+/** Whisper's prompt window is ~224 tokens. Stay safely under that. */
+const MAX_PROMPT_TOKENS = 200;
+
 export async function detectBackend(): Promise<Backend> {
   const anyNav = navigator as any;
   if (anyNav.gpu) {
@@ -35,7 +53,7 @@ export async function createPipeline(
   modelId: ModelId,
   backend: Backend,
   onProgress: (p: ProgressEntry) => void
-): Promise<(samples: Float32Array, opts: Record<string, unknown>) => Promise<unknown>> {
+): Promise<WhisperPipeline> {
   const transformers = await import('@huggingface/transformers');
   // Silence ORT's "Some nodes were not assigned to the preferred EP" warnings.
   // They're informational and unavoidable on WebGPU. ORT keeps cheap shape
@@ -74,7 +92,7 @@ export async function createPipeline(
       },
     }
   );
-  return pipeline as any;
+  return pipeline as unknown as WhisperPipeline;
 }
 
 export interface WhisperRunResult {
@@ -91,6 +109,14 @@ export interface WhisperRunOptions {
    * the consumer's absolute chunk-startedAt timeline.
    */
   offsetSeconds: number;
+  /**
+   * Optional text prompt passed to Whisper as preceding context. Tokenised
+   * and capped at `MAX_PROMPT_TOKENS` (~200). Used by the live consumer to
+   * feed the tail of already-committed transcript so the model continues
+   * the user's actual sentence instead of confabulating a fresh narrative
+   * (a common large-v3-turbo failure mode on isolated short windows).
+   */
+  initialPrompt?: string;
 }
 
 interface WhisperChunk {
@@ -99,7 +125,7 @@ interface WhisperChunk {
 }
 
 export async function runWhisper(
-  pipeline: (samples: Float32Array, opts: Record<string, unknown>) => Promise<unknown>,
+  pipeline: WhisperPipeline,
   samples: Float32Array,
   opts: WhisperRunOptions
 ): Promise<WhisperRunResult> {
@@ -117,8 +143,70 @@ export async function runWhisper(
     callOpts.language = opts.language;
     callOpts.task = 'transcribe';
   }
+  if (opts.initialPrompt && pipeline.tokenizer) {
+    const promptIds = encodePromptIds(pipeline.tokenizer, opts.initialPrompt);
+    if (promptIds.length > 0) {
+      callOpts.prompt_ids = promptIds;
+    }
+  }
   const raw = await pipeline(samples, callOpts);
-  return parseResult(raw, opts.offsetSeconds);
+  const parsed = parseResult(raw, opts.offsetSeconds);
+  if (opts.initialPrompt) {
+    // Whisper sometimes regurgitates the entire prompt verbatim at the head
+    // of its output instead of using it purely as conditioning context. The
+    // downstream LA-2 dedup compares committed-tail against new-head, so it
+    // cannot strip a long whole-prompt re-emission. Strip it here, where we
+    // know exactly what prompt we passed, before LA-2 ever sees the words.
+    parsed.words = stripLeadingPromptRegurgitation(parsed.words, opts.initialPrompt);
+  }
+  return parsed;
+}
+
+const PROMPT_MATCH_MIN = 3;
+
+/**
+ * If the head of `words` matches the start of `prompt`, strip those words.
+ * Comparison is case- and punctuation-insensitive. Requires at least
+ * `PROMPT_MATCH_MIN` (3) matching tokens so an incidental single-word
+ * coincidence (e.g. "the") does not accidentally swallow real content.
+ */
+function stripLeadingPromptRegurgitation(words: TimedWord[], prompt: string): TimedWord[] {
+  if (words.length === 0) return words;
+  const promptTokens = prompt
+    .split(/\s+/)
+    .map(normPromptWord)
+    .filter((s) => s.length > 0);
+  if (promptTokens.length === 0) return words;
+  let i = 0;
+  while (i < words.length && i < promptTokens.length) {
+    if (normPromptWord(words[i].text) !== promptTokens[i]) break;
+    i++;
+  }
+  return i >= PROMPT_MATCH_MIN ? words.slice(i) : words;
+}
+
+function normPromptWord(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9']/g, '');
+}
+
+/**
+ * Tokenise a prompt and keep only the tail that fits inside Whisper's prompt
+ * window. Special tokens are deliberately omitted: Whisper's generate logic
+ * adds `<|startofprev|>` etc. around the prompt itself.
+ */
+function encodePromptIds(tokenizer: WhisperTokenizer, prompt: string): number[] {
+  const trimmed = prompt.trim();
+  if (!trimmed) return [];
+  let ids: number[];
+  try {
+    ids = tokenizer.encode(trimmed, { add_special_tokens: false });
+  } catch {
+    // If the tokenizer is unavailable or the call shape differs across
+    // transformers.js versions, fail soft: no prompt is better than a crash.
+    return [];
+  }
+  if (ids.length <= MAX_PROMPT_TOKENS) return ids;
+  return ids.slice(ids.length - MAX_PROMPT_TOKENS);
 }
 
 function parseResult(raw: unknown, offsetSeconds: number): WhisperRunResult {

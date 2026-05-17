@@ -1,12 +1,14 @@
-import { MODELS, type ModelId } from '../lib/audio';
+import { MODELS, modelLabel, type ModelId, type ModelPanelRole } from '../lib/audio';
 
 export interface ModelPickerProps {
   value: ModelId;
   onChange: (id: ModelId) => void;
   disabled?: boolean;
+  /** Determines which label variant is shown ("recommended for live" vs batch). */
+  role: ModelPanelRole;
 }
 
-export function ModelPicker({ value, onChange, disabled }: ModelPickerProps) {
+export function ModelPicker({ value, onChange, disabled, role }: ModelPickerProps) {
   return (
     <select
       value={value}
@@ -16,7 +18,7 @@ export function ModelPicker({ value, onChange, disabled }: ModelPickerProps) {
     >
       {MODELS.map((m) => (
         <option key={m.id} value={m.id}>
-          {m.label}
+          {modelLabel(m.id, role)}
         </option>
       ))}
     </select>

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Cpu } from 'lucide-react';
 import { ModelPicker } from './ModelPicker';
-import { type ModelId } from '../lib/audio';
+import { type ModelId, type ModelPanelRole } from '../lib/audio';
 import { type TranscriptToken } from '../lib/db';
 
 export interface TranscriptPanelProps {
@@ -16,6 +16,8 @@ export interface TranscriptPanelProps {
   modelId: ModelId;
   onModelChange: (id: ModelId) => void;
   modelPickerDisabled?: boolean;
+  /** Drives panel-aware model labels in the picker. */
+  role: ModelPanelRole;
 
   // Backend and status
   backend: 'webgpu' | 'wasm' | null;
@@ -38,6 +40,7 @@ export function TranscriptPanel({
   modelId,
   onModelChange,
   modelPickerDisabled,
+  role,
   backend,
   statusBadge,
 }: TranscriptPanelProps) {
@@ -83,7 +86,12 @@ export function TranscriptPanel({
           <Cpu className="w-3 h-3" />
           {backend ?? '…'}
         </div>
-        <ModelPicker value={modelId} onChange={onModelChange} disabled={modelPickerDisabled} />
+        <ModelPicker
+          value={modelId}
+          onChange={onModelChange}
+          disabled={modelPickerDisabled}
+          role={role}
+        />
       </div>
 
       <div

@@ -7,7 +7,12 @@ import {
   type ProducerStats,
   type ConsumerStats,
 } from './components/DevPanel';
-import { DEFAULT_MODEL, isValidModel, type ModelId } from './lib/audio';
+import {
+  DEFAULT_BATCH_MODEL,
+  DEFAULT_LIVE_MODEL,
+  isValidModel,
+  type ModelId,
+} from './lib/audio';
 import { clearAll, type TranscriptToken } from './lib/db';
 
 type RecordStatus = 'idle' | 'loading-model' | 'ready' | 'recording' | 'stopping' | 'error';
@@ -24,9 +29,9 @@ interface ProgressEntry {
 const LIVE_MODEL_KEY = 'off-the-record:model';
 const BATCH_MODEL_KEY = 'off-the-record:batch-model';
 
-function loadStoredModel(key: string): ModelId {
+function loadStoredModel(key: string, fallback: ModelId): ModelId {
   const stored = localStorage.getItem(key);
-  return isValidModel(stored) ? stored : DEFAULT_MODEL;
+  return isValidModel(stored) ? stored : fallback;
 }
 
 function postAndWait(worker: Worker, message: unknown, doneType: string): Promise<void> {
@@ -43,8 +48,12 @@ function postAndWait(worker: Worker, message: unknown, doneType: string): Promis
 }
 
 export default function App() {
-  const [liveModelId, setLiveModelId] = useState<ModelId>(() => loadStoredModel(LIVE_MODEL_KEY));
-  const [batchModelId, setBatchModelId] = useState<ModelId>(() => loadStoredModel(BATCH_MODEL_KEY));
+  const [liveModelId, setLiveModelId] = useState<ModelId>(() =>
+    loadStoredModel(LIVE_MODEL_KEY, DEFAULT_LIVE_MODEL),
+  );
+  const [batchModelId, setBatchModelId] = useState<ModelId>(() =>
+    loadStoredModel(BATCH_MODEL_KEY, DEFAULT_BATCH_MODEL),
+  );
   const [status, setStatus] = useState<RecordStatus>('idle');
   const [batchStatus, setBatchStatus] = useState<BatchStatus>('idle');
   const [liveBackend, setLiveBackend] = useState<Backend>(null);
@@ -378,6 +387,7 @@ export default function App() {
           modelId={liveModelId}
           onModelChange={handleLiveModelChange}
           modelPickerDisabled={modelPickersDisabled}
+          role="live"
           backend={liveBackend}
           statusBadge={liveStatusBadge}
         />
@@ -390,6 +400,7 @@ export default function App() {
           modelId={batchModelId}
           onModelChange={handleBatchModelChange}
           modelPickerDisabled={modelPickersDisabled}
+          role="batch"
           backend={batchBackend}
           statusBadge={batchStatusBadge}
         />

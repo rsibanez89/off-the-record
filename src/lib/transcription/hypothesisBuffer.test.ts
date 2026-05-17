@@ -203,4 +203,25 @@ describe('HypothesisBuffer', () => {
     buf.ingest([word('hello', 0, 0.5), word('World.', 0.5, 1)]);
     expect(buf.getCommitted().map((w) => w.text)).toEqual(['hello', 'World.']);
   });
+
+  it('preserves tentative when the hypothesis collapses to empty after upstream filters', () => {
+    // Models the regurgitation-strip case: a tentative word is waiting for a
+    // confirming ingest, but the next Whisper call returns text that is
+    // entirely prompt regurgitation. The adapter strips it to `[]`. LA-2
+    // must NOT wipe the pending tentative just because this tick was a
+    // no-op upstream.
+    const buf = new HypothesisBuffer();
+    buf.ingest([word('hello', 0, 0.5), word('world', 0.5, 1)]);
+    expect(buf.getTentative().map((w) => w.text)).toEqual(['hello', 'world']);
+
+    // Empty hypothesis: no commits, tentative preserved.
+    const committed = buf.ingest([]);
+    expect(committed).toEqual([]);
+    expect(buf.getTentative().map((w) => w.text)).toEqual(['hello', 'world']);
+
+    // Next real hypothesis matches: tentative graduates as expected.
+    buf.ingest([word('hello', 0, 0.5), word('world', 0.5, 1)]);
+    expect(buf.getCommitted().map((w) => w.text)).toEqual(['hello', 'world']);
+    expect(buf.getTentative()).toEqual([]);
+  });
 });

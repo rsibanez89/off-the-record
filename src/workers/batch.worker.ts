@@ -6,6 +6,7 @@ import {
   detectBackend,
   runWhisper,
   type Backend,
+  type WhisperPipeline,
 } from '../lib/transcription/whisperAdapter';
 
 // One-shot batch transcription worker. Loads its own Whisper pipeline,
@@ -34,7 +35,7 @@ type OutMessage =
 
 declare const self: DedicatedWorkerGlobalScope;
 
-let pipelinePromise: Promise<any> | null = null;
+let pipelinePromise: Promise<WhisperPipeline> | null = null;
 let modelId: ModelId = DEFAULT_MODEL;
 let backend: Backend = 'wasm';
 
@@ -94,7 +95,10 @@ async function transcribe(sessionId: number) {
 
   const t0 = performance.now();
   try {
-    const result = await runWhisper(pipeline as any, samples, {
+    // Batch transcribes the full audio in one pass with no preceding context,
+    // so we deliberately do NOT pass `initialPrompt`. Live uses it; batch
+    // benefits from a clean run without confabulation guards interfering.
+    const result = await runWhisper(pipeline, samples, {
       language: isMultilingual(modelId) ? 'en' : undefined,
       offsetSeconds: 0,
     });

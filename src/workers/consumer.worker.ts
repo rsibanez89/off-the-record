@@ -8,6 +8,7 @@ import {
   detectBackend,
   runWhisper,
   type Backend,
+  type WhisperPipeline,
 } from '../lib/transcription/whisperAdapter';
 import { VAD_SILENCE_THRESHOLD } from '../lib/config';
 
@@ -78,7 +79,7 @@ declare const self: DedicatedWorkerGlobalScope;
 const wakeup = new BroadcastChannel('new-chunk');
 const hypBuffer = new HypothesisBuffer();
 
-let pipelinePromise: Promise<any> | null = null;
+let pipelinePromise: Promise<WhisperPipeline> | null = null;
 let modelId: ModelId = DEFAULT_MODEL;
 let backend: Backend = 'wasm';
 let processing = false;
@@ -238,6 +239,31 @@ function findLatestSentenceEnd(committed: readonly TimedWord[]): number {
   return 0;
 }
 
+/**
+ * Build a Whisper `initial_prompt` from the tail of already-committed words.
+ * Whisper's prompt window is ~224 tokens; the adapter caps token count, so
+ * here we just cap by characters as a cheap proxy. Returns `undefined` if
+ * the prompt would be empty (no committed text yet) so the adapter skips
+ * the prompt path entirely.
+ *
+ * Why we do this: on isolated short windows, large-v3-turbo confabulates a
+ * leading narrative ("So as Lily and her little robot..."). Feeding the real
+ * preceding transcript anchors the model in the user's actual sentence.
+ */
+const MAX_PROMPT_CHARS = 800;
+function buildInitialPrompt(committed: readonly TimedWord[]): string | undefined {
+  if (committed.length === 0) return undefined;
+  let text = '';
+  for (let i = committed.length - 1; i >= 0; i--) {
+    const sep = text ? ' ' : '';
+    const next = committed[i].text + sep + text;
+    if (next.length > MAX_PROMPT_CHARS) break;
+    text = next;
+  }
+  const trimmed = text.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 async function runOnce(minDur: number = MIN_WINDOW_S) {
   lastTickKind = 'idle';
   lastWindowDurationS = 0;
@@ -276,9 +302,10 @@ async function runOnce(minDur: number = MIN_WINDOW_S) {
 
   let result;
   try {
-    result = await runWhisper(pipeline as any, audio.samples, {
+    result = await runWhisper(pipeline, audio.samples, {
       language: isMultilingual(modelId) ? 'en' : undefined,
       offsetSeconds: audio.t0,
+      initialPrompt: buildInitialPrompt(hypBuffer.getCommitted()),
     });
   } catch (err) {
     lastTickKind = 'error';
